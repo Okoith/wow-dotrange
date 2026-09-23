@@ -1,0 +1,8 @@
+## Interface: 120005
+## Title: DotRange
+## Notes: Entfernungsanzeige als 3 farbige Boxen
+## Author: Dominique
+## Version: 2.0
+## SavedVariablesPerCharacter: DotRangeCharDB
+
+DotRange.lua
