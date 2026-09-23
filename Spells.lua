@@ -53,6 +53,7 @@ Spells.CLASS_SPELLS = {
 
 Spells.melee = {}
 Spells.near = {}
+Spells.available = true   -- kennt der Charakter mindestens einen Zauber? (SPEC 3.7)
 
 -- Bei PLAYER_LOGIN, dann ist die Klasse sicher bekannt
 function Spells:Init()
@@ -124,4 +125,27 @@ function Spells:KnownInfo()
     end
   end
   return out, table.concat(parts, ",")
+end
+
+-- Prüft, ob der Charakter mindestens einen Zauber aus melee oder near kennt (SPEC 3.7).
+-- Liefert C_SpellBook.IsSpellKnown für einen Zauber kein klares Ergebnis (API fehlt,
+-- Fehler, Secret Value), wird nichts geraten: Die Anzeige bleibt dann verfügbar.
+-- Rückgabe: true, wenn sich die Verfügbarkeit geändert hat.
+function Spells:UpdateAvailability()
+  local known, unclear = false, false
+  for _, group in ipairs({ "melee", "near" }) do
+    for _, spellID in ipairs(self[group]) do
+      local k = self:IsKnown(spellID)
+      if k == true then
+        known = true
+      elseif k == nil then
+        unclear = true
+      end
+    end
+  end
+  local available = self:HasAny() and (known or unclear)
+  local changed = available ~= self.available
+  self.available = available
+  self.availabilityUnclear = unclear and not known
+  return changed
 end
