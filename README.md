@@ -1,42 +1,69 @@
 # DotRange
 
-World-of-Warcraft-Addon, das die Entfernung zum aktuellen Ziel als drei farbige Boxen anzeigt.
+World of Warcraft addon (Retail 12.1, Midnight) that shows the distance to your current target as three colored boxes.
 
-| Boxen | Farbe (Standard) | Bedeutung |
-|-------|------------------|-----------|
-| 3 | Grün | Nahkampfreichweite (~5 yd) |
-| 2 | Gelb | Mittlere Distanz (je nach Klasse ~13–30 yd) |
-| 1 | Weiß | Ziel sichtbar, aber weiter entfernt |
-| 0 | Dunkel | Kein Ziel / Ziel nicht sichtbar |
+| Boxes | Color (default) | Meaning |
+|---|---|---|
+| 3 | Green | Melee range (~5 yd) |
+| 2 | Yellow | Medium distance (~13–30 yd, depending on class) |
+| 1 | White | Target visible, but further away |
+| 0 | Dark | No target / target not visible |
 
-## Befehle
+<!-- Screenshot: display in combat -->
 
-- `/dotrange` – Anzeige ein-/ausblenden
-- `/dotrange config` – Einstellungsfenster öffnen (auch über *Optionen → AddOns → DotRange*)
-- `/dotrange debug` – zeigt für das aktuelle Ziel jeden geprüften Spell mit „bekannt“ und Reichweitenergebnis
+## Installation
 
-## Einstellungen
+Download the zip from the [Releases](../../releases) page and extract it to `World of Warcraft\_retail_\Interface\AddOns\`.
 
-Farben, Boxgröße, Rahmenbreite, Transparenz, Position fixieren (die Anzeige lässt dann Mausklicks durch) und „Ohne Ziel ausblenden“. Alle Einstellungen werden pro Charakter gespeichert.
+The zip contains all required libraries. A plain copy of the repository does **not** work, because the libraries are only added by the packager.
 
-## Funktionsweise
+## Usage
 
-Die Entfernung wird über `C_Spell.IsSpellInRange` mit klassenspezifischen Spells ermittelt. Pro Stufe sind mehrere Kandidaten hinterlegt; es genügt, wenn einer davon in Reichweite ist. Spells, die der Charakter nicht kennt (andere Spezialisierung, Talent, Gestalt), liefern `nil` und werden ignoriert.
+- **Settings:** type `/dotrange` or open *Settings > AddOns > DotRange*. Changes apply immediately.
+- **Position:** drag the boxes with the left mouse button. With *Lock position* enabled, they can no longer be moved and clicks go through them.
+- **Settings are stored per character.** Settings from DotRange 2.x are taken over automatically on the first start of 3.0.
 
-| Klasse | Nahkampf | Mittlere Distanz |
-|--------|----------|------------------|
-| Krieger | Pummel | Taunt (30 yd), Charge (8–25 yd) |
-| Schurke | Kick | Shadowstep (25 yd), Pistol Shot (20 yd) |
+## Commands
+
+| Command | Effect |
+|---|---|
+| `/dotrange` | Open the settings |
+| `/dotrange help` | List the commands |
+| `/dotrange check` | Print the range check for the current target in the chat |
+| `/dotrange debug on\|off\|clear\|status` | Debug log (`DotRangeDebugLog` in SavedVariables, off by default) |
+
+## How it works
+
+The distance is determined with `C_Spell.IsSpellInRange` and class-specific spells. Each range level has several candidates; one of them being in range is enough. Spells your character does not know (other specialization, talent, form) return no result and are ignored.
+
+| Class | Melee | Medium distance |
+|---|---|---|
+| Warrior | Pummel | Taunt (30 yd), Charge (8–25 yd) |
+| Rogue | Kick | Shadowstep (25 yd), Pistol Shot (20 yd) |
 | Paladin | Rebuke, Crusader Strike | Hand of Reckoning (30 yd) |
-| Mönch | Spear Hand Strike | Provoke (30 yd) |
-| Todesritter | Death Strike | Death Grip (30 yd) |
-| Dämonenjäger | Chaos Strike, Shear, Disrupt | Throw Glaive (30 yd), Torment (30 yd) |
-| Jäger (Survival) | Muzzle, Raptor Strike | Harpoon (8–30 yd) |
-| Druide (Katze/Bär) | Shred, Mangle | Growl (30 yd), Skull Bash (13 yd) |
-| Schamane | Stormstrike, Lava Lash | Wind Shear (30 yd) |
+| Monk | Spear Hand Strike | Provoke (30 yd) |
+| Death Knight | Death Strike | Death Grip (30 yd) |
+| Demon Hunter | Chaos Strike, Shear, Disrupt | Throw Glaive (30 yd), Torment (30 yd) |
+| Hunter (Survival) | Muzzle, Raptor Strike | Harpoon (8–30 yd) |
+| Druid (Cat/Bear) | Shred, Mangle | Growl (30 yd), Skull Bash (13 yd) |
+| Shaman | Stormstrike, Lava Lash | Wind Shear (30 yd) |
 
-## Bekannte Einschränkungen
+## Known limitations
 
-- **Freundliche Ziele:** Die hinterlegten Spells wirken nur auf feindliche Ziele. Bei freundlichen Zielen zeigt die Anzeige daher höchstens 1 Box.
-- **Reine Fernkampf-/Heiler-Spezialisierungen** (z. B. Beast Mastery/Marksmanship-Jäger, Magier, Priester) haben keine passenden Nahkampf-Spells und sehen höchstens 1 Box.
-- **Midnight (12.0) / Secret Values:** Falls `IsSpellInRange` im Kampf oder in Instanzen einen Secret Value liefert, wird dieser nicht ausgewertet (die Stufe entfällt), statt einen Lua-Fehler zu erzeugen. `/dotrange debug` zeigt das als `range=SECRET` an.
+- **Friendly targets:** the spells only work on hostile targets, so friendly targets show at most 1 box.
+- **Ranged and healer specializations** without matching spells (for example Beast Mastery/Marksmanship hunters, mages, priests) show at most 1 box.
+- **Secret values (Midnight):** if the game returns the range check as a protected ("secret") value, DotRange does not evaluate it and treats it as out of range. Whether this happens in combat in instances has not been tested yet; the debug mode records it.
+
+## Development
+
+Libraries are fetched by the [BigWigs packager](https://github.com/BigWigsMods/packager) from `.pkgmeta` and are not part of the repository: LibStub, CallbackHandler-1.0, AceDB-3.0, AceDBOptions-3.0, AceGUI-3.0, AceConfig-3.0, LibEditMode.
+
+### Releases
+
+Pushing a tag `v*` (for example `v3.0.0`, test builds `v3.0.0-alpha.N`) starts `.github/workflows/release.yml`. It builds a zip with all libraries and publishes it as a GitHub release.
+
+**CurseForge upload (optional):** the workflow already passes `CF_API_TOKEN` to the packager. The packager only uploads to CurseForge when both a token and a project ID are present. To enable it, add an Actions secret named `CF_API_TOKEN` and replace the line `# ## X-Curse-Project-ID:` in `DotRange.toc` with `## X-Curse-Project-ID: <your project ID>`.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
