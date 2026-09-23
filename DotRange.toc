@@ -1,8 +1,21 @@
-## Interface: 120005
+## Interface: 120100
 ## Title: DotRange
-## Notes: Entfernungsanzeige als 3 farbige Boxen
+## Notes: Shows the distance to your target as three colored boxes.
+## Notes-deDE: Zeigt die Entfernung zum Ziel als drei farbige Boxen.
 ## Author: Dominique
-## Version: 2.1
+## Version: @project-version@
+## SavedVariables: DotRangeDB, DotRangeDebugLog
 ## SavedVariablesPerCharacter: DotRangeCharDB
+## X-License: MIT
+# ## X-Curse-Project-ID:
 
-DotRange.lua
+embeds.xml
+
+Locales\enUS.lua
+Locales\deDE.lua
+
+Debug.lua
+Spells.lua
+Display.lua
+Config.lua
+Core.lua

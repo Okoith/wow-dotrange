@@ -1,0 +1,30 @@
+# BigWigs Packager, siehe https://github.com/BigWigsMods/packager/wiki/Preparing-the-PackageMeta-File
+package-as: DotRange
+
+# Quellen wie im Referenzprojekt OwnDPS (dort im Spiel getestet):
+# - LibStub, CallbackHandler: WowAce-SVN (Beispiele im Packager-Wiki)
+# - AceDB/AceDBOptions/AceGUI/AceConfig: WowAce-SVN laut Ace3-README,
+#   Ace3 r1403 enthält Korrekturen für WoW 12.1 (Ace3 changelog.txt)
+# - LibEditMode: Wiki-Seite "Embedding" von p3lim-wow/LibEditMode
+externals:
+  libs/LibStub:
+    url: https://repos.wowace.com/wow/libstub/trunk
+    tag: 1.0
+  libs/CallbackHandler-1.0: https://repos.wowace.com/wow/callbackhandler/trunk/CallbackHandler-1.0
+  libs/AceDB-3.0: https://repos.wowace.com/wow/ace3/trunk/AceDB-3.0
+  libs/AceDBOptions-3.0: https://repos.wowace.com/wow/ace3/trunk/AceDBOptions-3.0
+  libs/AceGUI-3.0: https://repos.wowace.com/wow/ace3/trunk/AceGUI-3.0
+  libs/AceConfig-3.0: https://repos.wowace.com/wow/ace3/trunk/AceConfig-3.0
+  libs/LibEditMode:
+    url: https://github.com/p3lim-wow/LibEditMode
+    tag: latest
+
+ignore:
+  - docs
+  - CLAUDE.md
+  - SPEC.md
+  - SPEC_1.md
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
