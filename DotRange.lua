@@ -1,15 +1,23 @@
--- DotRange.lua v2.0
+-- DotRange.lua
 -- v1.8: Sichtbarkeit-Feature entfernt, kompletter Neuaufbau als Stable Version
 -- v1.9: Dämonenjäger von Disrupt auf Chaos Strike (162794) geändert
 -- v2.0: CheckInteractDistance entfernt (protected seit 10.2), ersetzt durch
 --       C_Spell.IsSpellInRange mit zwei klassenspezifischen Spells pro Klasse
 --       Alle Einstellungen per Charakter gespeichert (SavedVariablesPerCharacter)
 --       Blizzard Addon-Panel neu implementiert
+-- v2.1: Mehrere Kandidaten-Spells pro Klasse/Spezialisierung (Jäger-ID korrigiert,
+--       Krieger-Lücke 5-8 yd geschlossen, Druide + Schamane ergänzt)
+--       Fixierte Anzeige lässt Mausklicks durch, Position nicht mehr doppelt gespeichert
+--       Boxen werden nur noch bei Zustandsänderung neu eingefärbt
+--       Option "Ohne Ziel ausblenden", Reset aktualisiert das offene Fenster
+--       Schutz gegen Secret Values (Midnight 12.0)
+
+local addonName = ...
 
 -- ============================================================
 -- VERSION
 -- ============================================================
-local ADDON_VERSION = "2.0"
+local ADDON_VERSION = C_AddOns.GetAddOnMetadata(addonName, "Version") or "?"
 
 -- ============================================================
 -- STANDARD-EINSTELLUNGEN
@@ -22,13 +30,15 @@ local DEFAULTS = {
         off    = { r=0.15, g=0.15, b=0.15 },  -- Dunkel (inaktiv)
         border = { r=0.0,  g=0.0,  b=0.0  },  -- Rahmen
     },
-    boxSize    = 24,
-    borderSize = 1,
-    alpha      = 1.0,
-    locked     = false,
-    posPoint   = "CENTER",
-    posX       = 0,
-    posY       = -150,
+    boxSize      = 24,
+    borderSize   = 1,
+    alpha        = 1.0,
+    locked       = false,
+    hideNoTarget = false,
+    posPoint     = "CENTER",
+    posRelPoint  = "CENTER",
+    posX         = 0,
+    posY         = -150,
 }
 
 local cfg = {}
@@ -42,37 +52,88 @@ local function ApplyDefaults()
         db.colors[key] = db.colors[key] or { r=def.r, g=def.g, b=def.b }
     end
 
-    if db.boxSize    == nil then db.boxSize    = DEFAULTS.boxSize    end
-    if db.borderSize == nil then db.borderSize = DEFAULTS.borderSize end
-    if db.alpha      == nil then db.alpha      = DEFAULTS.alpha      end
-    if db.locked     == nil then db.locked     = DEFAULTS.locked     end
-    if db.posPoint   == nil then db.posPoint   = DEFAULTS.posPoint   end
-    if db.posX       == nil then db.posX       = DEFAULTS.posX       end
-    if db.posY       == nil then db.posY       = DEFAULTS.posY       end
+    -- Ältere Versionen haben nur posPoint gespeichert (Punkt = Relativpunkt)
+    if db.posRelPoint == nil then db.posRelPoint = db.posPoint end
+    for key, def in pairs(DEFAULTS) do
+        if key ~= "colors" and db[key] == nil then db[key] = def end
+    end
 
     cfg = db
 end
 
 -- ============================================================
--- NAHKAMPF-SPELLS JE KLASSE
--- meleeSpell  = Nahkampf (~5 yd) → alle 3 Boxen
--- nearSpell   = Mittlere Distanz (~30 yd) → 2 Boxen
--- Ohne nearSpell → nur Nahkampf-Check möglich
+-- SPELLS JE KLASSE
+-- melee = Nahkampf (~5 yd) → alle 3 Boxen
+-- near  = Mittlere Distanz (~13-30 yd) → 2 Boxen
+-- Pro Stufe mehrere Kandidaten: Es reicht, wenn EINER davon in Reichweite
+-- ist. Unbekannte Spells (andere Spezialisierung/Talent/Form) liefern laut
+-- C_Spell.IsSpellInRange nil und werden dadurch automatisch ignoriert.
 -- ============================================================
 local CLASS_SPELLS = {
-    ["WARRIOR"]     = { melee=6552,   near=100    }, -- Pummel / Charge (20 yd)
-    ["ROGUE"]       = { melee=1766,   near=36554  }, -- Kick / Shadowstep (25 yd)
-    ["PALADIN"]     = { melee=96231,  near=62124  }, -- Rebuke / Hammer of Wrath (30 yd)
-    ["MONK"]        = { melee=116705, near=115546 }, -- Spear Hand Strike / Flying Serpent Kick (50 yd)
-    ["DEATHKNIGHT"] = { melee=49998,  near=49576  }, -- Death Strike / Death Grip (30 yd)
-    ["DEMONHUNTER"] = { melee=162794, near=185123 }, -- Chaos Strike / Throw Glaive (30 yd)
-    ["HUNTER"]      = { melee=187707, near=186270 }, -- Muzzle / Harpoon (30 yd, Survival)
+    ["WARRIOR"] = {
+        melee = { 6552 },               -- Pummel
+        near  = { 355, 100 },           -- Taunt (30 yd), Charge (8-25 yd)
+    },
+    ["ROGUE"] = {
+        melee = { 1766 },               -- Kick
+        near  = { 36554, 185763 },      -- Shadowstep (25 yd), Pistol Shot (20 yd, Outlaw)
+    },
+    ["PALADIN"] = {
+        melee = { 96231, 35395 },       -- Rebuke, Crusader Strike
+        near  = { 62124 },              -- Hand of Reckoning (30 yd)
+    },
+    ["MONK"] = {
+        melee = { 116705 },             -- Spear Hand Strike
+        near  = { 115546 },             -- Provoke (30 yd)
+    },
+    ["DEATHKNIGHT"] = {
+        melee = { 49998 },              -- Death Strike
+        near  = { 49576 },              -- Death Grip (30 yd)
+    },
+    ["DEMONHUNTER"] = {
+        melee = { 162794, 203782, 183752 }, -- Chaos Strike (Havoc), Shear, Disrupt
+        near  = { 185123, 185245 },         -- Throw Glaive (30 yd), Torment (30 yd)
+    },
+    ["HUNTER"] = {
+        melee = { 187707, 186270 },     -- Muzzle, Raptor Strike (Survival)
+        near  = { 190925 },             -- Harpoon (8-30 yd, Survival)
+    },
+    ["DRUID"] = {
+        melee = { 5221, 33917 },        -- Shred (Katze), Mangle (Bär)
+        near  = { 6795, 106839 },       -- Growl (30 yd, Bär), Skull Bash (13 yd)
+    },
+    ["SHAMAN"] = {
+        melee = { 17364, 60103 },       -- Stormstrike, Lava Lash (Enhancement)
+        near  = { 57994 },              -- Wind Shear (30 yd)
+    },
 }
 
-local playerClass   = select(2, UnitClass("player"))
-local classSpells   = CLASS_SPELLS[playerClass] or {}
-local MELEE_SPELL_ID = classSpells.melee
-local NEAR_SPELL_ID  = classSpells.near
+local playerClass = select(2, UnitClass("player"))
+local classSpells = CLASS_SPELLS[playerClass] or {}
+local MELEE_SPELLS = classSpells.melee or {}
+local NEAR_SPELLS  = classSpells.near  or {}
+
+-- Liefert true/false/nil wie C_Spell.IsSpellInRange. Ein Secret Value
+-- (Midnight 12.0) darf nicht verglichen werden und zählt deshalb als nil.
+local function CheckRange(spellID, unit)
+    local inRange = C_Spell.IsSpellInRange(spellID, unit)
+    if issecretvalue and issecretvalue(inRange) then return nil, true end
+    return inRange, false
+end
+
+local function AnyInRange(spellList, unit)
+    for _, spellID in ipairs(spellList) do
+        if CheckRange(spellID, unit) == true then return true end
+    end
+    return false
+end
+
+local function IsKnown(spellID)
+    if C_SpellBook and C_SpellBook.IsSpellKnown then
+        return C_SpellBook.IsSpellKnown(spellID)
+    end
+    return nil
+end
 
 -- ============================================================
 -- ANCHOR FRAME
@@ -91,31 +152,52 @@ end)
 
 anchor:SetScript("OnDragStop", function(self)
     self:StopMovingOrSizing()
-    local point, _, _, x, y = self:GetPoint()
-    cfg.posPoint = point
-    cfg.posX     = math.floor(x)
-    cfg.posY     = math.floor(y)
+    -- Position speichert das Addon selbst, nicht zusätzlich der Layout-Cache
+    self:SetUserPlaced(false)
+    local point, _, relPoint, x, y = self:GetPoint()
+    cfg.posPoint    = point
+    cfg.posRelPoint = relPoint
+    cfg.posX        = math.floor(x + 0.5)
+    cfg.posY        = math.floor(y + 0.5)
 end)
 
 local function LoadPosition()
     anchor:ClearAllPoints()
-    anchor:SetPoint(cfg.posPoint or "CENTER", UIParent, cfg.posPoint or "CENTER", cfg.posX or 0, cfg.posY or -150)
+    anchor:SetPoint(cfg.posPoint, UIParent, cfg.posRelPoint, cfg.posX, cfg.posY)
 end
 
 local function ApplyLock()
     anchor:SetMovable(not cfg.locked)
+    -- Fixiert: Klicks gehen durch die Anzeige hindurch in die Spielwelt
+    anchor:EnableMouse(not cfg.locked)
 end
 
 -- ============================================================
 -- BOXEN AUFBAUEN
 -- ============================================================
+local lastCount, lastColorKey  -- zuletzt gezeichneter Zustand
+
+local function SetBoxes(activeCount, colorKey)
+    if not boxes[1] then return end
+    if activeCount == lastCount and colorKey == lastColorKey then return end
+    lastCount, lastColorKey = activeCount, colorKey
+
+    local c   = colorKey and cfg.colors[colorKey] or cfg.colors.off
+    local off = cfg.colors.off
+    for i = 1, BOX_COUNT do
+        local col = (i <= activeCount) and c or off
+        boxes[i].bg:SetColorTexture(col.r, col.g, col.b, 1.0)
+    end
+end
+
 local function RebuildBoxes()
-    local size  = cfg.boxSize    or DEFAULTS.boxSize
-    local bs    = cfg.borderSize or DEFAULTS.borderSize
+    local size  = cfg.boxSize
+    local bs    = cfg.borderSize
     local gap   = 4
     local bc    = cfg.colors.border
 
     anchor:SetSize((size * BOX_COUNT) + (gap * (BOX_COUNT - 1)), size)
+    anchor:SetAlpha(cfg.alpha)
 
     for i = 1, BOX_COUNT do
         if not boxes[i] then
@@ -139,29 +221,12 @@ local function RebuildBoxes()
         box.bg:ClearAllPoints()
         box.bg:SetPoint("TOPLEFT",     box, "TOPLEFT",       bs, -bs)
         box.bg:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT",  -bs,  bs)
-        local off = cfg.colors.off
-        box.bg:SetColorTexture(off.r, off.g, off.b, cfg.alpha or 1.0)
     end
-end
 
-local function SetBoxes(activeCount, colorKey)
-    local c   = colorKey and cfg.colors[colorKey] or cfg.colors.off
-    local alp = cfg.alpha or 1.0
-    local off = cfg.colors.off
-    local bc  = cfg.colors.border
-    local bs  = cfg.borderSize or DEFAULTS.borderSize
-
-    for i = 1, BOX_COUNT do
-        boxes[i].border:SetColorTexture(bc.r, bc.g, bc.b, 1.0)
-        boxes[i].bg:ClearAllPoints()
-        boxes[i].bg:SetPoint("TOPLEFT",     boxes[i], "TOPLEFT",      bs, -bs)
-        boxes[i].bg:SetPoint("BOTTOMRIGHT", boxes[i], "BOTTOMRIGHT", -bs,  bs)
-        if i <= activeCount then
-            boxes[i].bg:SetColorTexture(c.r, c.g, c.b, alp)
-        else
-            boxes[i].bg:SetColorTexture(off.r, off.g, off.b, alp)
-        end
-    end
+    -- Farben neu zeichnen erzwingen
+    local count, key = lastCount or 0, lastColorKey
+    lastCount, lastColorKey = nil, nil
+    SetBoxes(count, key)
 end
 
 -- ============================================================
@@ -172,13 +237,10 @@ local function UpdateDotRange()
         SetBoxes(0, nil); return
     end
 
-    local inMelee = MELEE_SPELL_ID and C_Spell.IsSpellInRange(MELEE_SPELL_ID, "target")
-    local inNear  = NEAR_SPELL_ID  and C_Spell.IsSpellInRange(NEAR_SPELL_ID,  "target")
-
-    if inMelee == true then
+    if AnyInRange(MELEE_SPELLS, "target") then
         -- Nahkampf: alle 3 Boxen
         SetBoxes(3, "melee")
-    elseif inNear == true then
+    elseif AnyInRange(NEAR_SPELLS, "target") then
         -- Mittlere Distanz: 2 Boxen
         SetBoxes(2, "near")
     elseif UnitIsVisible("target") then
@@ -199,9 +261,32 @@ anchor:SetScript("OnUpdate", function(self, delta)
 end)
 
 -- ============================================================
+-- SICHTBARKEIT
+-- ============================================================
+local userHidden = false  -- per /dotrange ausgeblendet
+
+local function UpdateVisibility()
+    local show = not userHidden
+    if show and cfg.hideNoTarget and not UnitExists("target") then
+        show = false
+    end
+    if show then
+        anchor:Show()
+        UpdateDotRange()
+    else
+        anchor:Hide()
+    end
+end
+
+-- ============================================================
 -- CONFIG PANEL
 -- ============================================================
 local panel = nil
+local panelWidgets = {}  -- Refresh-Funktionen der Bedienelemente
+
+local function RefreshPanel()
+    for _, refresh in ipairs(panelWidgets) do refresh() end
+end
 
 local function CreateColorSwatch(parent, label, colorKey, yOffset)
     local lbl = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -214,36 +299,44 @@ local function CreateColorSwatch(parent, label, colorKey, yOffset)
 
     local tex = btn:CreateTexture(nil, "BACKGROUND")
     tex:SetAllPoints()
-    local c = cfg.colors[colorKey]
-    tex:SetColorTexture(c.r, c.g, c.b, 1.0)
     btn.tex = tex
+
+    local function Refresh()
+        local c = cfg.colors[colorKey]
+        tex:SetColorTexture(c.r, c.g, c.b, 1.0)
+    end
+    Refresh()
+    table.insert(panelWidgets, Refresh)
+
+    local function SetColor(r, g, b)
+        cfg.colors[colorKey] = { r=r, g=g, b=b }
+        tex:SetColorTexture(r, g, b, 1.0)
+        RebuildBoxes()
+    end
 
     btn:SetScript("OnClick", function()
         local c = cfg.colors[colorKey]
         ColorPickerFrame:SetupColorPickerAndShow({
             swatchFunc = function()
-                local r, g, b = ColorPickerFrame:GetColorRGB()
-                cfg.colors[colorKey] = { r=r, g=g, b=b }
-                tex:SetColorTexture(r, g, b, 1.0)
-                RebuildBoxes()
+                SetColor(ColorPickerFrame:GetColorRGB())
             end,
-            cancelFunc = function(prev)
-                cfg.colors[colorKey] = { r=prev.r, g=prev.g, b=prev.b }
-                tex:SetColorTexture(prev.r, prev.g, prev.b, 1.0)
-                RebuildBoxes()
+            cancelFunc = function()
+                local r, g, b = ColorPickerFrame:GetPreviousValues()
+                SetColor(r, g, b)
             end,
-            r = c.r, g = c.g, b = c.b, opacity = 0,
+            r = c.r, g = c.g, b = c.b,
         })
     end)
 end
 
 local function CreateSlider(parent, label, minVal, maxVal, step, getFunc, setFunc, yOffset)
+    local fmt = (step >= 1) and "%d" or "%.2f"
+
     local s = CreateFrame("Slider", nil, parent, "OptionsSliderTemplate")
     s:SetPoint("TOPLEFT", parent, "TOPLEFT", 16, yOffset)
     s:SetWidth(220)
     s:SetMinMaxValues(minVal, maxVal)
     s:SetValueStep(step)
-    s:SetValue(getFunc())
     s:SetObeyStepOnDrag(true)
     s.Text:SetText(label)
     s.Low:SetText(minVal)
@@ -251,11 +344,17 @@ local function CreateSlider(parent, label, minVal, maxVal, step, getFunc, setFun
 
     local valText = s:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     valText:SetPoint("TOP", s, "BOTTOM", 0, -2)
-    valText:SetText(string.format("%.2f", getFunc()))
+
+    local function Refresh()
+        s:SetValue(getFunc())
+        valText:SetText(string.format(fmt, getFunc()))
+    end
+    Refresh()
+    table.insert(panelWidgets, Refresh)
 
     s:SetScript("OnValueChanged", function(self, val)
         val = math.floor(val / step + 0.5) * step
-        valText:SetText(string.format("%.2f", val))
+        valText:SetText(string.format(fmt, val))
         setFunc(val)
         RebuildBoxes()
     end)
@@ -265,8 +364,12 @@ local function CreateCheckbox(parent, label, getFunc, setFunc, yOffset)
     local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     cb:SetPoint("TOPLEFT", parent, "TOPLEFT", 16, yOffset)
     cb:SetSize(24, 24)
-    cb:SetChecked(getFunc())
     cb.text:SetText(label)
+
+    local function Refresh() cb:SetChecked(getFunc()) end
+    Refresh()
+    table.insert(panelWidgets, Refresh)
+
     cb:SetScript("OnClick", function(self)
         setFunc(self:GetChecked() == true)
     end)
@@ -287,7 +390,7 @@ end
 
 local function BuildPanel()
     panel = CreateFrame("Frame", "DotRangeConfigPanel", UIParent)
-    panel:SetSize(380, 560)
+    panel:SetSize(380, 590)
     panel:SetPoint("CENTER")
     panel:SetFrameStrata("DIALOG")
     panel:SetMovable(true)
@@ -346,9 +449,12 @@ local function BuildPanel()
 
     -- Verhalten
     CreateHeader(panel, "Verhalten", y)                         y = y - 28
-    CreateCheckbox(panel, "Position fixieren (nicht verschiebbar)",
+    CreateCheckbox(panel, "Position fixieren (nicht verschiebbar, klickbar durch)",
         function() return cfg.locked end,
-        function(v) cfg.locked = v; ApplyLock() end, y)
+        function(v) cfg.locked = v; ApplyLock() end, y)         y = y - 28
+    CreateCheckbox(panel, "Ohne Ziel ausblenden",
+        function() return cfg.hideNoTarget end,
+        function(v) cfg.hideNoTarget = v; UpdateVisibility() end, y)
 
     -- Zurücksetzen
     local resetBtn = CreateFrame("Button", nil, panel, "GameMenuButtonTemplate")
@@ -361,9 +467,9 @@ local function BuildPanel()
         RebuildBoxes()
         ApplyLock()
         LoadPosition()
-        anchor:Show()
-        panel:Hide()
-        panel = nil
+        userHidden = false
+        UpdateVisibility()
+        RefreshPanel()
         print("|cFF00FF00DotRange:|r Einstellungen zurückgesetzt.")
     end)
 end
@@ -377,8 +483,9 @@ end
 -- BLIZZARD ADDON-PANEL
 -- ============================================================
 local function RegisterBlizzardPanel()
-    local f = CreateFrame("Frame", "DotRangeSettingsFrame", UIParent)
+    local f = CreateFrame("Frame", "DotRangeSettingsFrame")
     f:SetSize(600, 400)
+    f:Hide()
 
     -- Version
     local ver = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -410,20 +517,29 @@ end
 -- ============================================================
 -- INITIALISIERUNG
 -- ============================================================
+local loaded = false
+
 local initFrame = CreateFrame("Frame")
 initFrame:RegisterEvent("ADDON_LOADED")
+initFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
 
 initFrame:SetScript("OnEvent", function(self, event, arg1)
-    if event ~= "ADDON_LOADED" or arg1 ~= "DotRange" then return end
+    if event == "PLAYER_TARGET_CHANGED" then
+        if loaded then UpdateVisibility() end
+        return
+    end
+
+    if event ~= "ADDON_LOADED" or arg1 ~= addonName then return end
 
     ApplyDefaults()
+    loaded = true
     LoadPosition()
     RebuildBoxes()
     ApplyLock()
-    anchor:Show()
+    UpdateVisibility()
 
-    if not MELEE_SPELL_ID then
-        print("|cFFFF2020DotRange:|r Kein Nahkampf-Spell für Klasse '" .. (playerClass or "?") .. "' gefunden.")
+    if #MELEE_SPELLS == 0 then
+        print("|cFFFF2020DotRange:|r Keine Nahkampf-Spells für Klasse '" .. (playerClass or "?") .. "' hinterlegt.")
     end
 
     if Settings and Settings.RegisterCanvasLayoutCategory then
@@ -436,26 +552,37 @@ end)
 -- ============================================================
 -- SLASH-BEFEHLE
 -- ============================================================
+local function DebugSpellList(label, spellList)
+    if #spellList == 0 then return label .. ": -" end
+    local parts = {}
+    for _, spellID in ipairs(spellList) do
+        local inRange, secret = CheckRange(spellID, "target")
+        local name = C_Spell.GetSpellName(spellID) or "?"
+        table.insert(parts, string.format("%s(%d) bekannt=%s range=%s",
+            name, spellID, tostring(IsKnown(spellID)),
+            secret and "SECRET" or tostring(inRange)))
+    end
+    return label .. ": " .. table.concat(parts, ", ")
+end
+
 SLASH_DOTRANGE1 = "/dotrange"
 SlashCmdList["DOTRANGE"] = function(msg)
     msg = strtrim(msg or "")
     if msg == "config" then
         OpenConfig()
     elseif msg == "debug" then
+        local prefix = "|cFF00FF00DotRange v" .. ADDON_VERSION .. " Debug:|r "
         if UnitExists("target") then
-            local melee = MELEE_SPELL_ID and C_Spell.IsSpellInRange(MELEE_SPELL_ID, "target")
-            local near  = NEAR_SPELL_ID  and C_Spell.IsSpellInRange(NEAR_SPELL_ID,  "target")
-            local vis   = UnitIsVisible("target")
-            print(string.format("|cFF00FF00DotRange v%s Debug:|r Klasse=%s Melee(ID=%s)=%s Near(ID=%s)=%s Visible=%s",
-                ADDON_VERSION, playerClass,
-                tostring(MELEE_SPELL_ID), tostring(melee),
-                tostring(NEAR_SPELL_ID),  tostring(near),
-                tostring(vis)))
+            print(prefix .. "Klasse=" .. tostring(playerClass)
+                .. " Visible=" .. tostring(UnitIsVisible("target")))
+            print("  " .. DebugSpellList("Melee", MELEE_SPELLS))
+            print("  " .. DebugSpellList("Near",  NEAR_SPELLS))
         else
-            print("|cFF00FF00DotRange v" .. ADDON_VERSION .. " Debug:|r Kein Ziel ausgewählt")
+            print(prefix .. "Kein Ziel ausgewählt")
         end
     elseif msg == "" then
-        if anchor:IsShown() then anchor:Hide() else anchor:Show() end
+        userHidden = not userHidden
+        UpdateVisibility()
     else
         print("|cFF00FF00DotRange v" .. ADDON_VERSION .. " Befehle:|r /dotrange | /dotrange config | /dotrange debug")
     end
