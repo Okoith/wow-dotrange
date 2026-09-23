@@ -1,6 +1,6 @@
 # DotRange
 
-<p align="center"><img src="docs/dotrange.jpg" alt="DotRange logo" width="256"></p>
+<p align="center"><img src="docs/dotrange_logo.png" alt="DotRange logo" width="256"></p>
 
 World of Warcraft addon (Retail 12.1, Midnight) that shows the distance to your current target as three colored boxes.
 
