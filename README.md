@@ -1,5 +1,7 @@
 # DotRange
 
+<p align="center"><img src="docs/dotrange.jpg" alt="DotRange logo" width="256"></p>
+
 World of Warcraft addon (Retail 12.1, Midnight) that shows the distance to your current target as three colored boxes.
 
 | Boxes | Color (default) | Meaning |
@@ -10,6 +12,7 @@ World of Warcraft addon (Retail 12.1, Midnight) that shows the distance to your 
 | 0 | Dark | No target / target not visible |
 
 <!-- Screenshot: display in combat -->
+<!-- Screenshot: settings menu -->
 
 ## Installation
 
@@ -19,9 +22,18 @@ The zip contains all required libraries. A plain copy of the repository does **n
 
 ## Usage
 
-- **Settings:** type `/dotrange` or open *Settings > AddOns > DotRange*. Changes apply immediately.
-- **Position:** drag the boxes with the left mouse button. With *Lock position* enabled, they can no longer be moved and clicks go through them.
-- **Settings are stored per character.** Settings from DotRange 2.x are taken over automatically on the first start of 3.0.
+- **Settings:** type `/dotrange` or open *Settings > AddOns > DotRange*. Changes apply immediately. The settings cannot be opened during combat.
+- **Position:** drag the boxes with the left mouse button. With *Lock* enabled, they can no longer be moved and clicks go through them.
+- **Visibility:** always, only in combat, only in instances, or only in a group; optionally hidden in vehicles; always hidden during pet battles.
+- **Target:** optionally hidden without a target, and optionally only shown for hostile targets.
+- **Classes without matching spells:** if your character knows none of the spells below (for example a mage or a Beast Mastery hunter), the display is hidden automatically and the settings show a note. This is checked again when you change your specialization or talents.
+- **Profiles:** settings are stored per character; copy them from another character or reset them. Settings from DotRange 2.x are taken over automatically on the first start of 3.0.
+
+### Settings
+
+- **General:** hide without target, only for hostile targets, visibility, hide in vehicles, lock, debug mode
+- **Appearance:** colors (melee, just outside, medium distance, inactive, border), box size, border width, opacity
+- **Profiles:** switch, copy from another character, reset
 
 ## Commands
 
@@ -50,9 +62,8 @@ The distance is determined with `C_Spell.IsSpellInRange` and class-specific spel
 
 ## Known limitations
 
-- **Friendly targets:** the spells only work on hostile targets, so friendly targets show at most 1 box.
-- **Ranged and healer specializations** without matching spells (for example Beast Mastery/Marksmanship hunters, mages, priests) show at most 1 box.
-- **Secret values (Midnight):** if the game returns the range check as a protected ("secret") value, DotRange does not evaluate it and treats it as out of range. Whether this happens in combat in instances has not been tested yet; the debug mode records it.
+- **Friendly targets:** the spells only work on hostile targets, so friendly targets show at most 1 box. Enable *Only for hostile targets* to hide the display for them.
+- **Secret values (Midnight):** in tests with 3.0.0-alpha.1, the range check was readable in combat, in the open world and in dungeons. Should the game ever return it as a protected ("secret") value, DotRange treats it as out of range instead of causing an error.
 
 ## Development
 

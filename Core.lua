@@ -21,6 +21,9 @@ ns.defaults = {
     alpha = 1.0,
     locked = false,
     hideNoTarget = false,
+    hostileOnly = false,     -- nur bei feindlichen Zielen (SPEC 3.6)
+    visibility = "always",   -- "always" | "combat" | "instance" | "group" (SPEC 3.5)
+    hideInVehicle = false,
     position = { point = "CENTER", relPoint = "CENTER", x = 0, y = -150 },
   },
   global = {
@@ -109,6 +112,8 @@ local function logStatus(state)
     hostile = hostileSecret and "<SECRET>" or hostile,
     visible = visibleSecret and "<SECRET>" or visible,
     state = state,
+    hidden = ns.Display.last.hidden,          -- Grund, warum die Boxen ausgeblendet sind
+    visibilityMacro = ns.Display.visibilityMacro,
   }
   local Spells = ns.Spells
   for _, group in ipairs({ "melee", "near" }) do
@@ -137,11 +142,12 @@ ns.SafeUpdate = safeUpdate
 function ns:Refresh()
   ns.Display:ApplySettings()
   ns.Display:UpdateVisibility()
+  safeUpdate()
 end
 
 function ns:OnProfileChanged()
   ns:Refresh()
-  ns.Config:Refresh()
+  ns.Options:Notify()
 end
 ns.OnProfileCopied = ns.OnProfileChanged
 ns.OnProfileReset = ns.OnProfileChanged
@@ -154,9 +160,16 @@ local events = CreateFrame("Frame")
 local handlers = {}
 local lastKnownSignature
 
--- Bekannte Zauber nur loggen, wenn sich die Liste geändert hat (SPELLS_CHANGED kommt oft)
-local function logSpellsIfChanged(reason)
-  if not ns.loggedIn or not ns.Debug:IsEnabled() then return end
+-- Bekannte Zauber neu prüfen (SPEC 3.7). Loggen nur, wenn sich die Liste
+-- geändert hat, denn SPELLS_CHANGED kommt oft.
+local function spellsChanged(reason)
+  if not ns.loggedIn then return end
+  if ns.Spells:UpdateAvailability() then
+    ns.Debug:Add("availability", { reason = reason, available = ns.Spells.available })
+    ns.Options:Notify()
+    safeUpdate()
+  end
+  if not ns.Debug:IsEnabled() then return end
   local _, signature = ns.Spells:KnownInfo()
   if signature == lastKnownSignature then return end
   lastKnownSignature = signature
@@ -174,11 +187,12 @@ function handlers.ADDON_LOADED(name)
   ns.db.RegisterCallback(ns, "OnProfileReset", "OnProfileReset")
   ns.Debug:Init()
   ns.migrated = migrateCharDB()
-  ns.Config:Init()
+  ns.Options:Init()
 end
 
 function handlers.PLAYER_LOGIN()
   ns.Spells:Init()
+  ns.Spells:UpdateAvailability()
   ns.inCombat = InCombatLockdown() and true or false
   ns.Display:Create()
 
@@ -189,19 +203,24 @@ function handlers.PLAYER_LOGIN()
   end
   lastKnownSignature = select(2, ns.Spells:KnownInfo())
   ns.loggedIn = true
-
-  if not ns.Spells:HasAny() then
-    Print(L["NO_SPELLS"]:format(ns.Spells.class or "?"))
-  end
+  ns.Debug:Add("availability", {
+    reason = "login", available = ns.Spells.available, unclear = ns.Spells.availabilityUnclear,
+  })
   Print(L["LOADED"]:format(ns.VERSION))
 end
 
 function handlers.PLAYER_ENTERING_WORLD(isInitialLogin, isReloadingUi)
   ns.Debug:LogInstance({ initial = isInitialLogin, reload = isReloadingUi })
+  ns.Display:UpdateVisibility()   -- "Nur in Instanzen" hängt an IsInInstance()
 end
 
-function handlers.PLAYER_TARGET_CHANGED()
+function handlers.ZONE_CHANGED_NEW_AREA()
   ns.Display:UpdateVisibility()
+end
+
+-- Zielregeln sofort anwenden, nicht erst beim nächsten Takt
+function handlers.PLAYER_TARGET_CHANGED()
+  safeUpdate()
 end
 
 function handlers.PLAYER_REGEN_DISABLED()
@@ -213,15 +232,16 @@ end
 function handlers.PLAYER_REGEN_ENABLED()
   ns.inCombat = false
   ns.Debug:Add("combatEnd")
+  ns.Display:UpdateVisibility()   -- im Kampf zurückgestellte Änderung nachholen
 end
 
 function handlers.PLAYER_SPECIALIZATION_CHANGED(unit)
   if unit ~= nil and unit ~= "player" then return end
-  logSpellsIfChanged("specChanged")
+  spellsChanged("specChanged")
 end
 
 function handlers.SPELLS_CHANGED()
-  logSpellsIfChanged("spellsChanged")
+  spellsChanged("spellsChanged")
 end
 
 events:SetScript("OnEvent", function(_, event, ...)
@@ -294,10 +314,12 @@ function commands.debug(arg)
   if arg == "on" then
     ns.Debug:SetEnabled(true)
     ns.Debug:LogInstance({ reason = "debugOn" })
+    ns.Options:Notify()
     Print(L["DEBUG_ON"])
   elseif arg == "off" then
     ns.Debug:Add("debugOff")
     ns.Debug:SetEnabled(false)
+    ns.Options:Notify()
     Print(L["DEBUG_OFF"])
   elseif arg == "clear" then
     ns.Debug:Clear()
@@ -311,8 +333,9 @@ SLASH_DOTRANGE1 = "/dotrange"
 SlashCmdList.DOTRANGE = function(msg)
   if not ns.db then return end
   local cmd, arg = strtrim(msg or ""):lower():match("^(%S*)%s*(.-)$")
-  if cmd == "" or cmd == "config" then
-    ns.Config:Open()
+  if cmd == "" then
+    -- Menü öffnen; ohne Menü (Bibliothek fehlt) die Hilfe zeigen
+    if not ns.Options:Open() then printHelp() end
   elseif commands[cmd] then
     commands[cmd](arg)
   else

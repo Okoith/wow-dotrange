@@ -66,9 +66,16 @@ DotRange zeigt die Entfernung zum aktuellen Ziel als **drei farbige Boxen**. Die
 - Im Kampf einmal pro Sekunde (bei vorhandenem Ziel): Ziel vorhanden, feindlich, sichtbar, **pro Zauber das Ergebnis von `IsSpellInRange` bzw. ob es geheim ist**, angezeigter Zustand (0–3)
 - Das bisherige `/dotrange debug` mit Chat-Ausgabe bleibt als `/dotrange check`
 
-## 4. Offener Prüfpunkt: Secret Values
+## 4. Testergebnis: Secret Values
 
-Es ist nicht getestet, ob `C_Spell.IsSpellInRange` im Kampf in Instanzen geheime Werte liefert. Der Debugmodus muss genau das beantworten. Ist das Ergebnis geheim, zählt es aktuell als „nicht in Reichweite“. Eine Lösung dafür wird erst nach dem Test entworfen.
+| Punkt | Ergebnis |
+|---|---|
+| `C_Spell.IsSpellInRange` im Kampf | **nicht geheim**, weder in der offenen Welt noch im Dungeon (Terrasse der Magister, Anhänger, Paladin Vergeltung) (Test mit 3.0.0-alpha.1) |
+| Migration aus `DotRangeCharDB` | funktioniert (Test mit 3.0.0-alpha.1) |
+| Anzeige-Stufen 3/2/1/0 | korrekt wie in 2.1 (Test mit 3.0.0-alpha.1) |
+| Debug-Log | ohne Fehler (Test mit 3.0.0-alpha.1) |
+
+Die Absicherung (`pcall`, Prüfung mit `issecretvalue`) bleibt trotzdem bestehen: Ein geheimes Ergebnis würde weiterhin als „nicht in Reichweite“ zählen und im Debug-Log als `"<SECRET>"` erscheinen.
 
 ## 5. Technik
 

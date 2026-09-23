@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.0.0-alpha.2
+
+Test build for milestone 2.
+
+- New settings menu under *Settings > AddOns > DotRange* (AceConfig), opened with `/dotrange`. All changes apply immediately. The old settings window has been removed.
+- Profiles: switch, copy from another character, or reset (AceDBOptions).
+- Visibility: always, only in combat, only in instances, or only in a group; optionally hidden in vehicles; always hidden during pet battles.
+- New option *Only for hostile targets* (off by default).
+- If your character knows none of the spells used for the range check, the display is hidden automatically and the menu shows a note. This is checked again when your specialization or spells change. With only medium-range spells, the display shows at most 2 boxes.
+- Debug mode can also be switched on and off in the menu.
+- The chat message for classes without spells on login has been replaced by the note in the menu.
+
 ## 3.0.0-alpha.1
 
 Test build for milestone 1. The display works as in 2.1.
