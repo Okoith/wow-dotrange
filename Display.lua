@@ -8,6 +8,9 @@ local ADDON_NAME, ns = ...
 -- SPEC 3.5). Die Boxen liegen im inneren Frame "content", der nach den Zielregeln
 -- (SPEC 3.6, 3.7) ein- und ausgeblendet wird. Beide Frames sind nicht geschützt,
 -- Show/Hide von content ist daher auch im Kampf erlaubt.
+--
+-- Verschoben wird nur im WoW-Bearbeitungsmodus (EditMode.lua). Dort ist die Anzeige
+-- immer sichtbar und zeigt als Muster drei grüne Boxen (SPEC 3.4).
 
 local Display = {}
 ns.Display = Display
@@ -66,6 +69,7 @@ local function rebuildBoxes()
   local bc   = p.colors.border
 
   frame:SetSize((size * BOX_COUNT) + (GAP * (BOX_COUNT - 1)), size)
+  frame:SetScale(p.scale)
   frame:SetAlpha(p.alpha)
 
   for i = 1, BOX_COUNT do
@@ -99,23 +103,14 @@ local function rebuildBoxes()
 end
 
 ---------------------------------------------------------------------------
--- Position und Sperre (Verschieben per Maus wie in 2.1; LibEditMode folgt in Meilenstein 3)
+-- Position des aktiven Bearbeitungsmodus-Layouts (EditMode.lua), sonst Profil-Position
 ---------------------------------------------------------------------------
 
 function Display:ApplyPosition()
   if not frame then return end
-  local pos = ns.db.profile.position
+  local pos = ns.EditMode:GetPosition()
   frame:ClearAllPoints()
   frame:SetPoint(pos.point or "CENTER", UIParent, pos.relPoint or pos.point or "CENTER", pos.x or 0, pos.y or 0)
-end
-
--- Die Maus liegt auf content: Ist content ausgeblendet, fängt die Anzeige keine Klicks ab.
-function Display:ApplyLock()
-  if not frame then return end
-  local locked = ns.db.profile.locked
-  frame:SetMovable(not locked)
-  -- Fixiert: Klicks gehen durch die Anzeige hindurch in die Spielwelt
-  content:EnableMouse(not locked)
 end
 
 ---------------------------------------------------------------------------
@@ -141,8 +136,18 @@ end
 function Display:Update()
   if not frame then return 0 end
   local p = ns.db.profile
-  local exists = safeCall("UnitExists", UnitExists, "target")
   local last = self.last
+
+  -- Bearbeitungsmodus: Muster mit drei grünen Boxen, unabhängig von Ziel und Regeln
+  if self.editMode then
+    last.hidden = false
+    content:Show()
+    setBoxes(3, "melee")
+    last.state = 3
+    return 3
+  end
+
+  local exists = safeCall("UnitExists", UnitExists, "target")
 
   local reason = hiddenReason(p, exists)
   last.hidden = reason or false
@@ -192,6 +197,7 @@ local function inInstance()
 end
 
 function Display:BuildVisibilityMacro()
+  if self.editMode then return "show" end   -- im Bearbeitungsmodus immer sichtbar
   local p = ns.db.profile
   local parts = { "[petbattle] hide" }
   if p.hideInVehicle then parts[#parts + 1] = "[vehicleui] hide" end
@@ -233,11 +239,16 @@ function Display:UpdateVisibility()
   return ok
 end
 
+function Display:SetEditMode(on)
+  self.editMode = on and true or false
+  self:UpdateVisibility()
+  if ns.SafeUpdate then ns.SafeUpdate() end   -- Muster sofort zeigen bzw. entfernen
+end
+
 -- Einstellungen sofort anwenden
 function Display:ApplySettings()
   if not frame then return end
   rebuildBoxes()
-  self:ApplyLock()
   self:ApplyPosition()
 end
 
@@ -247,31 +258,15 @@ end
 
 function Display:Create()
   if frame then return end
+  -- Keine Maus: Klicks gehen immer durch die Anzeige hindurch. Verschoben wird im
+  -- Bearbeitungsmodus über den Auswahl-Frame von LibEditMode.
   frame = CreateFrame("Frame", "DotRangeAnchor", UIParent)
-  frame:SetMovable(true)
+  frame:SetClampedToScreen(true)
   frame:EnableMouse(false)
 
   content = CreateFrame("Frame", nil, frame)
   content:SetAllPoints(frame)
-  content:RegisterForDrag("LeftButton")
-
-  content:SetScript("OnDragStart", function()
-    if not ns.db.profile.locked then frame:StartMoving() end
-  end)
-
-  content:SetScript("OnDragStop", function()
-    frame:StopMovingOrSizing()
-    -- Position speichert das Addon selbst, nicht zusätzlich der Layout-Cache
-    frame:SetUserPlaced(false)
-    local point, _, relPoint, x, y = frame:GetPoint()
-    ns.db.profile.position = {
-      point = point,
-      relPoint = relPoint,
-      x = math.floor(x + 0.5),
-      y = math.floor(y + 0.5),
-    }
-    ns.Debug:Add("positionChanged", ns.db.profile.position)
-  end)
+  content:EnableMouse(false)
 
   local elapsed = 0
   frame:SetScript("OnUpdate", function(_, delta)

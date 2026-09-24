@@ -24,7 +24,9 @@ ns.defaults = {
     hostileOnly = false,     -- nur bei feindlichen Zielen (SPEC 3.6)
     visibility = "always",   -- "always" | "combat" | "instance" | "group" (SPEC 3.5)
     hideInVehicle = false,
-    position = { point = "CENTER", relPoint = "CENTER", x = 0, y = -150 },
+    scale = 1,
+    position = { point = "CENTER", relPoint = "CENTER", x = 0, y = -150 },   -- bis 3.0.0-alpha.2; Startwert für Layouts
+    layouts = {},            -- Position pro Bearbeitungsmodus-Layout (EditMode.lua)
   },
   global = {
     debug = false,
@@ -114,6 +116,7 @@ local function logStatus(state)
     state = state,
     hidden = ns.Display.last.hidden,          -- Grund, warum die Boxen ausgeblendet sind
     visibilityMacro = ns.Display.visibilityMacro,
+    layout = ns.EditMode:GetLayoutName(),
   }
   local Spells = ns.Spells
   for _, group in ipairs({ "melee", "near" }) do
@@ -147,6 +150,7 @@ end
 
 function ns:OnProfileChanged()
   ns:Refresh()
+  ns.EditMode:Refresh()
   ns.Options:Notify()
 end
 ns.OnProfileCopied = ns.OnProfileChanged
@@ -195,6 +199,7 @@ function handlers.PLAYER_LOGIN()
   ns.Spells:UpdateAvailability()
   ns.inCombat = InCombatLockdown() and true or false
   ns.Display:Create()
+  ns.EditMode:Init()
 
   ns.Debug:LogMeta()
   if ns.migrated then
