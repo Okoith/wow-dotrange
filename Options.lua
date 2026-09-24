@@ -32,6 +32,7 @@ local function set(info, value)
   t[k] = value
   ns.Debug:Add("setting", { [table.concat(info.arg, ".")] = value })
   ns:Refresh()
+  ns.EditMode:Refresh()   -- Sperre und Skalierung im Bearbeitungsmodus-Dialog nachziehen
 end
 
 local function getColor(info)
@@ -97,6 +98,10 @@ local function buildOptions()
         type = "toggle", order = 32, name = L["OPT_LOCKED"], desc = L["OPT_LOCKED_DESC"],
         arg = { "locked" }, get = get, set = set,
       },
+      resetPosition = {
+        type = "execute", order = 33, name = L["OPT_RESET_POSITION"], desc = L["OPT_RESET_POSITION_DESC"],
+        func = function() ns.EditMode:ResetPosition() end,
+      },
       debugHeader = { type = "header", order = 90, name = L["OPT_DEBUG"] },
       debug = {
         type = "toggle", order = 91, name = L["OPT_DEBUG"], desc = L["OPT_DEBUG_DESC"], width = "full",
@@ -143,8 +148,13 @@ local function buildOptions()
         type = "range", order = 22, name = L["OPT_BORDER_SIZE"], min = 0, max = 4, step = 1,
         arg = { "borderSize" }, get = get, set = set,
       },
+      scale = {
+        type = "range", order = 23, name = L["OPT_SCALE"], min = 0.5, max = 3, step = 0.05, isPercent = true,
+        arg = { "scale" }, get = get,
+        set = function(info, value) set(info, ns.RoundScale(value)) end,
+      },
       alpha = {
-        type = "range", order = 23, name = L["OPT_ALPHA"], min = 0.2, max = 1, step = 0.05, isPercent = true,
+        type = "range", order = 24, name = L["OPT_ALPHA"], min = 0.2, max = 1, step = 0.05, isPercent = true,
         arg = { "alpha" }, get = get, set = set,
       },
     },
@@ -198,4 +208,31 @@ end
 function Options:Notify()
   local registry = LibStub("AceConfigRegistry-3.0", true)
   if registry then pcall(registry.NotifyChange, registry, ADDON_NAME) end
+end
+
+local function editModeShown()
+  if not EditModeManagerFrame then return "missing" end
+  local ok, shown = pcall(EditModeManagerFrame.IsShown, EditModeManagerFrame)
+  return ok and shown or "error"
+end
+
+-- Eigenständiges AceConfigDialog-Fenster, für den Button im Bearbeitungsmodus.
+-- Settings.OpenToCategory lief dort bei OwnDPS ohne Fehler, zeigte aber kein Fenster.
+-- Das AceGUI-Fenster liegt in der Ebene FULLSCREEN_DIALOG, der Bearbeitungsmodus in DIALOG.
+function Options:OpenStandalone()
+  if not AceConfigDialog then return false end
+  local ok, err = pcall(AceConfigDialog.Open, AceConfigDialog, ADDON_NAME)
+  local openFrame = AceConfigDialog.OpenFrames and AceConfigDialog.OpenFrames[ADDON_NAME]
+  local okShown, frameShown = false, nil
+  if openFrame and openFrame.frame then
+    okShown, frameShown = pcall(openFrame.frame.IsShown, openFrame.frame)
+  end
+  ns.Debug:Add("optionsStandalone", {
+    ok = ok,
+    err = err,
+    editModeShown = editModeShown(),
+    frameShown = okShown and frameShown or false,
+  })
+  if not ok then ns.Debug:Error("AceConfigDialog:Open", err) end
+  return ok
 end
