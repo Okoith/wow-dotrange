@@ -7,7 +7,7 @@
 ## SavedVariables: DotRangeDB, DotRangeDebugLog
 ## SavedVariablesPerCharacter: DotRangeCharDB
 ## X-License: MIT
-# ## X-Curse-Project-ID:
+## X-Curse-Project-ID: 1709677
 
 embeds.xml
 

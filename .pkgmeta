@@ -23,7 +23,6 @@ ignore:
   - docs
   - CLAUDE.md
   - SPEC.md
-  - SPEC_1.md
 
 manual-changelog:
   filename: CHANGELOG.md
