@@ -1,8 +1,10 @@
 # Changelog
 
-## 3.0.0
+## 3.0.1
 
-*Release candidate: 3.0.0-beta.1*
+- CurseForge project ID added, automatic uploads to CurseForge.
+
+## 3.0.0
 
 DotRange 3.0 keeps the familiar three boxes and range logic of 2.1 and brings a settings menu, WoW Edit Mode support, visibility rules, profiles and an English and German translation.
 

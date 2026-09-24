@@ -28,7 +28,7 @@ World of Warcraft addon (Retail 12.1, Midnight) that shows the distance to your 
 
 ## Installation
 
-Download the zip from the [Releases](../../releases) page and extract it to `World of Warcraft\_retail_\Interface\AddOns\`.
+Install DotRange from [CurseForge](https://curseforge.com/project/1709677) (for example with the CurseForge app), or download the zip from the [Releases](../../releases) page and extract it to `World of Warcraft\_retail_\Interface\AddOns\`.
 
 The zip contains all required libraries. A plain copy of the repository does **not** work, because the libraries are only added by the packager.
 
@@ -95,13 +95,12 @@ Libraries are fetched by the [BigWigs packager](https://github.com/BigWigsMods/p
 
 ### Releases
 
-Pushing a tag `v*` (for example `v3.0.0`, test builds `v3.0.0-alpha.N` or `v3.0.0-beta.N`) starts `.github/workflows/release.yml`. It builds a zip with all libraries and publishes it as a GitHub release.
+Pushing a tag `v*` (for example `v3.0.0`, test builds `v3.0.0-alpha.N` or `v3.0.0-beta.N`) starts `.github/workflows/release.yml`. It builds a zip with all libraries, publishes it as a GitHub release and uploads it to [CurseForge](https://curseforge.com/project/1709677).
 
-**CurseForge upload (optional):** the workflow already passes `CF_API_TOKEN` to the packager. The packager only uploads to CurseForge when both a token and a project ID are present. Without them, only the GitHub release is created. To enable the upload:
+**CurseForge upload:** the packager uploads to CurseForge because both a token and a project ID are present:
 
-1. Create an API token at <https://authors.curseforge.com/#/settings/api-tokens>.
-2. In the GitHub repository, add it as an Actions secret named **`CF_API_TOKEN`** (*Settings > Secrets and variables > Actions > New repository secret*).
-3. In `DotRange.toc`, replace the line `# ## X-Curse-Project-ID:` with `## X-Curse-Project-ID: <your project ID>`.
+- the project ID is set in `DotRange.toc` (`## X-Curse-Project-ID: 1709677`),
+- the API token is stored as the Actions secret **`CF_API_TOKEN`** (*Settings > Secrets and variables > Actions*) and passed to the packager by the workflow. A new token can be created at <https://authors.curseforge.com/#/settings/api-tokens>.
 
 ## License
 
