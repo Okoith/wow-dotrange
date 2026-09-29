@@ -51,20 +51,55 @@ Spells.CLASS_SPELLS = {
   },
 }
 
+-- Eigene Stufen pro Spezialisierung. Schlüssel: Spec-ID, wie GetSpecializationInfo sie
+-- zur Laufzeit liefert. Eine Tabelle ersetzt die Klassenliste nur für diese Spec.
+--   melee → 3 Boxen, near → 2 Boxen, far → 1 Box
+--   visibleFallback = false: ohne far-Treffer bleiben alle Boxen inaktiv
+--   (kein Rückfall auf UnitIsVisible)
+Spells.DEVOURER_SPEC_ID = 1480   -- Dämonenjäger Verschlinger (warcraft.wiki.gg, SpecializationID)
+
+Spells.SPEC_SPELLS = {
+  [Spells.DEVOURER_SPEC_ID] = {
+    melee = { 473662 },             -- Consume (25 yd)
+    near  = { 183752 },             -- Disrupt (30 yd beim Verschlinger)
+    far   = { 1245412 },            -- Voidblade (35 yd)
+    visibleFallback = false,
+  },
+}
+
+Spells.GROUPS = { "melee", "near", "far" }
+
 Spells.melee = {}
 Spells.near = {}
+Spells.far = {}
+Spells.visibleFallback = true
 Spells.available = true   -- kennt der Charakter mindestens einen Zauber? (SPEC 3.7)
 
 -- Bei PLAYER_LOGIN, dann ist die Klasse sicher bekannt
 function Spells:Init()
-  self.class = select(2, UnitClass("player"))
-  local list = self.CLASS_SPELLS[self.class] or {}
+  local _, class, classID = UnitClass("player")
+  self.class = class
+  self.classID = classID
+  self:ApplySpec()
+end
+
+-- Wählt die Stufen für die aktuelle Spezialisierung: eigene Tabelle, sonst Klassenliste.
+-- Rückgabe: true, wenn sich die Spec-ID geändert hat.
+function Spells:ApplySpec()
+  local specID = self:GetSpec()
+  local changed = specID ~= self.specID
+  self.specID = specID
+  local list = (specID and self.SPEC_SPELLS[specID]) or self.CLASS_SPELLS[self.class] or {}
+  self.specTable = (specID and self.SPEC_SPELLS[specID]) ~= nil
   self.melee = list.melee or {}
   self.near = list.near or {}
+  self.far = list.far or {}
+  self.visibleFallback = list.visibleFallback ~= false
+  return changed
 end
 
 function Spells:HasAny()
-  return #self.melee > 0 or #self.near > 0
+  return #self.melee > 0 or #self.near > 0 or #self.far > 0
 end
 
 -- Reichweite eines Zaubers. Rückgabe: inRange (true/false/nil), secret, err.
@@ -109,7 +144,8 @@ function Spells:GetSpec()
   local ok, index = pcall(GetSpecialization)
   if not ok or type(index) ~= "number" then return nil, nil end
   local okInfo, specID, specName = pcall(GetSpecializationInfo, index)
-  if not okInfo then return nil, nil end
+  if not okInfo or issecret(specID) or type(specID) ~= "number" then return nil, nil end
+  if issecret(specName) then specName = nil end
   return specID, specName
 end
 
@@ -117,7 +153,7 @@ end
 -- und eine Signatur, um Änderungen zu erkennen.
 function Spells:KnownInfo()
   local out, parts = {}, {}
-  for _, group in ipairs({ "melee", "near" }) do
+  for _, group in ipairs(self.GROUPS) do
     for _, spellID in ipairs(self[group]) do
       local known = self:IsKnown(spellID)
       out[group .. " " .. spellID] = known
@@ -127,13 +163,13 @@ function Spells:KnownInfo()
   return out, table.concat(parts, ",")
 end
 
--- Prüft, ob der Charakter mindestens einen Zauber aus melee oder near kennt (SPEC 3.7).
+-- Prüft, ob der Charakter mindestens einen Zauber aus melee, near oder far kennt (SPEC 3.7).
 -- Liefert C_SpellBook.IsSpellKnown für einen Zauber kein klares Ergebnis (API fehlt,
 -- Fehler, Secret Value), wird nichts geraten: Die Anzeige bleibt dann verfügbar.
 -- Rückgabe: true, wenn sich die Verfügbarkeit geändert hat.
 function Spells:UpdateAvailability()
   local known, unclear = false, false
-  for _, group in ipairs({ "melee", "near" }) do
+  for _, group in ipairs(self.GROUPS) do
     for _, spellID in ipairs(self[group]) do
       local k = self:IsKnown(spellID)
       if k == true then
@@ -148,4 +184,27 @@ function Spells:UpdateAvailability()
   self.available = available
   self.availabilityUnclear = unclear and not known
   return changed
+end
+
+-- Reichweite laut C_Spell.GetSpellInfo (minRange, maxRange), fürs Debug-Log
+function Spells:GetRangeInfo(spellID)
+  local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
+  if not ok or type(info) ~= "table" then return nil, nil end
+  return info.minRange, info.maxRange
+end
+
+-- Alle Spezialisierungen der eigenen Klasse (ID und Name), zur Laufzeit ermittelt.
+-- Damit lässt sich im Debug-Log prüfen, ob die Devourer-ID stimmt.
+function Spells:ClassSpecs()
+  local out = {}
+  if type(self.classID) ~= "number" then return out end
+  local okNum, num = pcall(GetNumSpecializationsForClassID, self.classID)
+  if not okNum or type(num) ~= "number" then return out end
+  for i = 1, num do
+    local ok, id, name = pcall(GetSpecializationInfoForClassID, self.classID, i)
+    if ok and type(id) == "number" and not issecret(id) and not issecret(name) then
+      out["spec" .. i] = tostring(id) .. " " .. tostring(name)
+    end
+  end
+  return out
 end

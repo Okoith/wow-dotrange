@@ -2,7 +2,7 @@
 
 <p align="center"><img src="docs/dotrange_logo.png" alt="DotRange logo" width="256"></p>
 
-World of Warcraft addon (Retail 12.1, Midnight) that shows the distance to your current target as three colored boxes.
+World of Warcraft addon (Retail 12.1, Midnight) that shows the distance to your current target as three colored boxes. Made for melee classes and specializations, plus Devourer Demon Hunter.
 
 | Boxes | Color (default) | Meaning |
 |---|---|---|
@@ -18,6 +18,7 @@ World of Warcraft addon (Retail 12.1, Midnight) that shows the distance to your 
 ## Features
 
 - **Three boxes** for melee range, medium distance and "visible but far away", with class-specific range checks
+- **Devourer Demon Hunter:** own range levels for the ranged Devourer specialization (25, 30 and 35 yd)
 - **Edit Mode:** move the display in WoW's Edit Mode, position saved per layout, scale slider, option to lock it; a sample with three green boxes is shown there
 - **Visibility:** always, only in combat, only in instances, or only in a group; optionally hidden in vehicles; always hidden during pet battles
 - **Target options:** hide without a target, show only for hostile targets
@@ -83,6 +84,19 @@ The distance is determined with `C_Spell.IsSpellInRange` and class-specific spel
 | Hunter (Survival) | Muzzle, Raptor Strike | Harpoon (8–30 yd) |
 | Druid (Cat/Bear) | Shred, Mangle | Growl (30 yd), Skull Bash (13 yd) |
 | Shaman | Stormstrike, Lava Lash | Wind Shear (30 yd) |
+
+### Devourer Demon Hunter
+
+The Devourer specialization is a ranged specialization and has its own range levels. They replace the Demon Hunter list above for this specialization only:
+
+| Boxes | Spell | Range |
+|---|---|---|
+| 3 | Consume | 25 yd |
+| 2 | Disrupt | 30 yd (Devourer) |
+| 1 | Voidblade | 35 yd |
+| 0 | — | target further away than 35 yd |
+
+For Devourer, a single box always means "Voidblade in range". There is no fallback to "target visible": beyond 35 yd, all boxes are inactive. `/dotrange check` shows which range levels are active.
 
 ## Known limitations
 

@@ -66,6 +66,18 @@ DotRange zeigt die Entfernung zum aktuellen Ziel als **drei farbige Boxen**. Die
 - Im Kampf einmal pro Sekunde (bei vorhandenem Ziel): Ziel vorhanden, feindlich, sichtbar, **pro Zauber das Ergebnis von `IsSpellInRange` bzw. ob es geheim ist**, angezeigter Zustand (0–3)
 - Das bisherige `/dotrange debug` mit Chat-Ausgabe bleibt als `/dotrange check`
 
+### 3.9 Eigene Stufen pro Spezialisierung (ab 3.1.0)
+- Tabelle `SPEC_SPELLS` in `Spells.lua`, Schlüssel ist die Spec-ID aus `GetSpecializationInfo` (zur Laufzeit ermittelt). Sie ersetzt die Klassenliste nur für diese Spec; alle anderen Specs bleiben unverändert.
+- **Dämonenjäger Verschlinger** (Spec-ID 1480 laut warcraft.wiki.gg, SpecializationID):
+  - 3 Boxen: Consume 473662 (25 m)
+  - 2 Boxen: Disrupt 183752 (30 m beim Verschlinger)
+  - 1 Box: Voidblade 1245412 (35 m)
+  - weiter als 35 m: alle Boxen inaktiv, kein Rückfall auf `UnitIsVisible`
+- Disrupt bleibt bei den anderen DH-Specs in der Nahkampfliste.
+- Neu gewählt bei `PLAYER_SPECIALIZATION_CHANGED` und `SPELLS_CHANGED`; automatisches Ausblenden und `/dotrange check` berücksichtigen die Stufen.
+- Debug-Log: Eintrag `spec` (beim Laden, Debug an, Spec-Wechsel) mit aktueller Spec-ID, Devourer-ID der Tabelle, allen Specs der Klasse und der Reichweite laut `C_Spell.GetSpellInfo`; Eintrag `specRange` mit dem Ergebnis von `IsSpellInRange` pro Zauber (true/false/nil), sobald sich eines ändert.
+- Offener Prüfpunkt: Wowhead nennt für Voidblade 15 m, laut Vorgabe 35 m. Der Eintrag `spec` zeigt die Reichweite aus dem Spiel.
+
 ## 4. Testergebnis: Secret Values
 
 | Punkt | Ergebnis |

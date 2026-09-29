@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.1.0-alpha.1
+
+Test build.
+
+- **Devourer Demon Hunter:** the new ranged Devourer specialization gets its own range levels: 3 boxes with Consume in range (25 yd), 2 boxes with Disrupt (30 yd), 1 box with Voidblade (35 yd). Beyond 35 yd, all boxes are inactive. For the other Demon Hunter specializations nothing changes; Disrupt stays in their melee list.
+- DotRange is now made for melee classes and specializations, plus Devourer Demon Hunter.
+- Range levels are chosen per specialization and updated when you change your specialization.
+- Automatic hiding and `/dotrange check` take the Devourer range levels into account; `/dotrange check` also shows the current specialization.
+- Debug mode logs the specialization ID and, for Devourer, the result of each range check.
+
 ## 3.0.1
 
 - CurseForge project ID added, automatic uploads to CurseForge.

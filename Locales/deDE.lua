@@ -72,3 +72,8 @@ L["OPT_RESET_POSITION"] = "Position zurücksetzen"
 L["OPT_RESET_POSITION_DESC"] = "Setzt die Anzeige im aktiven Bearbeitungsmodus-Layout auf die Standardposition zurück."
 L["OPT_SCALE"] = "Skalierung"
 L["EDITMODE_MORE_SETTINGS"] = "Weitere Einstellungen"
+
+L["CHECK_FAR"] = "Fern"
+L["CHECK_SPEC"] = "Spec=%s (%s), %s"
+L["CHECK_SPEC_OWN"] = "eigene Reichweitenstufen"
+L["CHECK_SPEC_CLASS"] = "Zauberliste der Klasse"
