@@ -117,9 +117,10 @@ local function logStatus(state)
     hidden = ns.Display.last.hidden,          -- Grund, warum die Boxen ausgeblendet sind
     visibilityMacro = ns.Display.visibilityMacro,
     layout = ns.EditMode:GetLayoutName(),
+    specID = ns.Spells.specID,
   }
   local Spells = ns.Spells
-  for _, group in ipairs({ "melee", "near" }) do
+  for _, group in ipairs(Spells.GROUPS) do
     for _, spellID in ipairs(Spells[group]) do
       local inRange, secret, err = Spells:CheckRange(spellID, "target")
       local value = inRange
@@ -130,9 +131,48 @@ local function logStatus(state)
   ns.Debug:Add("status", out)
 end
 
+-- Specs mit eigener Stufentabelle (Verschlinger): Ergebnis von IsSpellInRange pro Zauber
+-- (true/false/nil bzw. "<SECRET>"), auch außerhalb des Kampfes. Geloggt wird nur, wenn
+-- sich ein Ergebnis oder der Zustand ändert.
+local lastSpecRange
+
+local function logSpecRange(state)
+  local Spells = ns.Spells
+  if not Spells.specTable then return end
+  local exists = ns.Display.SafeBool("UnitExists", UnitExists, "target")
+  if exists ~= true then
+    lastSpecRange = nil
+    return
+  end
+  local out = { specID = Spells.specID, state = state }
+  local parts = { tostring(state) }
+  for _, group in ipairs(Spells.GROUPS) do
+    for _, spellID in ipairs(Spells[group]) do
+      local inRange, secret, err = Spells:CheckRange(spellID, "target")
+      local value
+      if secret then
+        value = "<SECRET>"
+      elseif err then
+        value = "error"
+      else
+        value = tostring(inRange)   -- "true" / "false" / "nil"
+      end
+      out[group .. " " .. spellID] = value
+      parts[#parts + 1] = value
+    end
+  end
+  local signature = table.concat(parts, ",")
+  if signature == lastSpecRange then return end
+  lastSpecRange = signature
+  ns.Debug:Add("specRange", out)
+end
+
 function ns:Update()
   local state = ns.Display:Update()
-  if ns.Debug:IsEnabled() then logStatus(state) end
+  if ns.Debug:IsEnabled() then
+    logStatus(state)
+    if not ns.Display.editMode then logSpecRange(state) end
+  end
 end
 
 local function safeUpdate()
@@ -164,12 +204,41 @@ local events = CreateFrame("Frame")
 local handlers = {}
 local lastKnownSignature
 
--- Bekannte Zauber neu prüfen (SPEC 3.7). Loggen nur, wenn sich die Liste
--- geändert hat, denn SPELLS_CHANGED kommt oft.
+-- Spezialisierung und Stufen fürs Debug-Log: aktuelle Spec-ID, Devourer-ID der
+-- Stufentabelle, alle Specs der Klasse (zur Laufzeit ermittelt) und die Reichweite
+-- der Zauber laut C_Spell.GetSpellInfo.
+local function logSpec(reason)
+  if not ns.Debug:IsEnabled() then return end
+  local Spells = ns.Spells
+  local specID, specName = Spells:GetSpec()
+  local out = Spells:ClassSpecs()
+  out.reason = reason
+  out.specID = specID
+  out.specName = specName
+  out.devourerSpecID = Spells.DEVOURER_SPEC_ID
+  out.isDevourer = specID == Spells.DEVOURER_SPEC_ID
+  out.specTable = Spells.specTable
+  out.visibleFallback = Spells.visibleFallback
+  for _, group in ipairs(Spells.GROUPS) do
+    for _, spellID in ipairs(Spells[group]) do
+      local minRange, maxRange = Spells:GetRangeInfo(spellID)
+      out["range " .. group .. " " .. spellID] = ns.Debug.S(minRange) .. "-" .. ns.Debug.S(maxRange)
+    end
+  end
+  ns.Debug:Add("spec", out)
+end
+
+-- Spezialisierung und bekannte Zauber neu prüfen (SPEC 3.7). Loggen nur, wenn sich
+-- etwas geändert hat, denn SPELLS_CHANGED kommt oft.
 local function spellsChanged(reason)
   if not ns.loggedIn then return end
-  if ns.Spells:UpdateAvailability() then
+  local specChanged = ns.Spells:ApplySpec()
+  if specChanged then logSpec(reason) end
+  local availabilityChanged = ns.Spells:UpdateAvailability()
+  if availabilityChanged then
     ns.Debug:Add("availability", { reason = reason, available = ns.Spells.available })
+  end
+  if specChanged or availabilityChanged then
     ns.Options:Notify()
     safeUpdate()
   end
@@ -202,6 +271,7 @@ function handlers.PLAYER_LOGIN()
   ns.EditMode:Init()
 
   ns.Debug:LogMeta()
+  logSpec("login")
   if ns.migrated then
     ns.Debug:Add("migration", ns.migration)
     Print(L["MIGRATED"])
@@ -310,15 +380,23 @@ function commands.check()
     return
   end
   local visible, visibleSecret = safeBool("UnitIsVisible", UnitIsVisible, "target")
-  Print(L["CHECK_HEADER"] .. " " .. L["CHECK_TARGET"]:format(tostring(ns.Spells.class), debugValue(visible, visibleSecret)))
-  print("  " .. spellLine(L["CHECK_MELEE"], ns.Spells.melee))
-  print("  " .. spellLine(L["CHECK_NEAR"], ns.Spells.near))
+  local Spells = ns.Spells
+  Print(L["CHECK_HEADER"] .. " " .. L["CHECK_TARGET"]:format(tostring(Spells.class), debugValue(visible, visibleSecret)))
+  local specID, specName = Spells:GetSpec()
+  print("  " .. L["CHECK_SPEC"]:format(tostring(specName), tostring(specID),
+    Spells.specTable and L["CHECK_SPEC_OWN"] or L["CHECK_SPEC_CLASS"]))
+  print("  " .. spellLine(L["CHECK_MELEE"], Spells.melee))
+  print("  " .. spellLine(L["CHECK_NEAR"], Spells.near))
+  if #Spells.far > 0 then
+    print("  " .. spellLine(L["CHECK_FAR"], Spells.far))
+  end
 end
 
 function commands.debug(arg)
   if arg == "on" then
     ns.Debug:SetEnabled(true)
     ns.Debug:LogInstance({ reason = "debugOn" })
+    logSpec("debugOn")
     ns.Options:Notify()
     Print(L["DEBUG_ON"])
   elseif arg == "off" then

@@ -170,8 +170,11 @@ function Display:Update()
   elseif Spells:AnyInRange(Spells.near, "target") then
     -- Mittlere Distanz: 2 Boxen
     state, colorKey = 2, "near"
-  elseif safeCall("UnitIsVisible", UnitIsVisible, "target") == true then
-    -- Sichtbar aber weit weg: 1 Box
+  elseif Spells:AnyInRange(Spells.far, "target") then
+    -- Eigene Fernstufe einer Spezialisierung (z. B. Verschlinger): 1 Box
+    state, colorKey = 1, "medium"
+  elseif Spells.visibleFallback and safeCall("UnitIsVisible", UnitIsVisible, "target") == true then
+    -- Sichtbar aber weit weg: 1 Box (nicht bei Specs mit eigener Fernstufe)
     state, colorKey = 1, "medium"
   else
     -- Nicht sichtbar / kein Ziel

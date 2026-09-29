@@ -75,3 +75,8 @@ L["OPT_RESET_POSITION"] = "Reset position"
 L["OPT_RESET_POSITION_DESC"] = "Moves the display back to its default position in the active Edit Mode layout."
 L["OPT_SCALE"] = "Scale"
 L["EDITMODE_MORE_SETTINGS"] = "More settings"
+
+L["CHECK_FAR"] = "Far"
+L["CHECK_SPEC"] = "Spec=%s (%s), %s"
+L["CHECK_SPEC_OWN"] = "own range levels"
+L["CHECK_SPEC_CLASS"] = "class spell list"
