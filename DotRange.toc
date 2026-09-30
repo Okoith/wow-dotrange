@@ -2,6 +2,7 @@
 ## Title: DotRange
 ## Notes: Shows the distance to your target as three colored boxes.
 ## Notes-deDE: Zeigt die Entfernung zum Ziel als drei farbige Boxen.
+## IconTexture: Interface\AddOns\DotRange\media\icon.png
 ## Author: Dominique
 ## Version: @project-version@
 ## SavedVariables: DotRangeDB, DotRangeDebugLog

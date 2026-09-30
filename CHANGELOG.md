@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.0.3
+
+- Addon icon in the AddOns list
+
 ## 3.1.0-alpha.1
 
 Test build.
