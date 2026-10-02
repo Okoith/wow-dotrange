@@ -25,7 +25,7 @@ World of Warcraft addon (Retail 12.1, Midnight) that shows the distance to your 
 - **Automatic hiding** for classes and specializations without matching spells
 - **Appearance:** colors for every range level, inactive boxes and border; box size, border width, scale, opacity
 - **Profiles:** settings per character, copy them from another character
-- **Mythic+ statistics:** at the end of a Mythic+ run, a small window shows how much of your combat time your target was in range, split into total, bosses and trash, compared with your best and average in that dungeon
+- **Mythic+ statistics:** at the end of a Mythic+ run, a small window shows how much of your combat time your target was in range, per section (trash, each boss) and in total, compared with your best and average in that dungeon
 - **Languages:** English and German
 
 ## Installation
@@ -107,8 +107,9 @@ For Devourer, a single box always means "Voidblade in range". There is no fallba
 During a Mythic+ run, DotRange measures how much of your combat time your target was in melee range, that is, how long the display would show 3 boxes (for Devourer: Consume, 25 yd). The measurement runs in the background, even while the display itself is hidden.
 
 - **Counted time:** only while you are in combat, alive, and have a target that is not yourself and can be attacked. Time between boss pull and boss end counts as *bosses*, everything else as *trash*.
-- **End of the run:** after the key is completed, a window shows the percentage in range for total, bosses and trash, with your best and average in that dungeon. Values of 90 % or more are green, 75 % or more yellow, below that red. A new best is highlighted. If you are still in combat, the window appears when combat ends.
-- **Rating:** only completed runs with at least 30 seconds of counted time are stored. Bosses and trash are only rated with at least 10 seconds each. Runs that are reset or left before completion are shown with the note "Aborted, not rated" and are not stored.
+- **Sections:** like WarpDeplete, the run is split into sections in the order you play them: trash, first boss, trash, second boss, and so on. Trash counts towards the next boss you pull ("trash before …"); trash after the last boss is a separate section. A wipe and the next attempt count as the same boss section. Boss names come from the encounter, the dungeon journal or the scenario objectives; if none is readable, the boss is shown as "Boss N".
+- **End of the run:** after the key is completed, a window lists every section with its percentage in range and your best for that section, followed by the total with best, average and number of runs, and a line with bosses, trash and counted combat time. Values of 90 % or more are green, 75 % or more yellow, below that red. A new best is highlighted. If you are still in combat, the window appears when combat ends.
+- **Rating:** only completed runs with at least 30 seconds of counted time are stored. Bosses, trash and each section are only rated with at least 10 seconds each; otherwise "–" is shown. Runs that are reset or left before completion are shown with the note "Aborted, not rated" and are not stored.
 - **Reload:** a `/reload` during the run does not lose the measurement; it continues afterwards.
 - **Storage:** the statistics are stored per character and dungeon (not in the profile, so copying a profile does not copy statistics). The keystone level of the last run is shown, but runs are not separated by level.
 
