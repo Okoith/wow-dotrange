@@ -146,6 +146,16 @@ local function instanceName()
   return nonEmpty(plain(name, "string"))
 end
 
+-- Instanz-ID (8. Rückgabe von GetInstanceInfo), nur in einer Dungeon-Instanz.
+-- Im Test (3.1.0, Mördergasse) lieferte CHALLENGE_MODE_START genau diese ID (2813) statt
+-- der mapChallengeModeID (587).
+local function currentInstanceID()
+  local ok, _, instanceType, _, _, _, _, _, instanceID = pcall(GetInstanceInfo)
+  if not ok then return nil end
+  if plain(instanceType, "string") ~= "party" then return nil end
+  return plain(instanceID, "number")
+end
+
 function Stats:GetMapName(mapID)
   return mapUIName(mapID)
 end
@@ -446,6 +456,77 @@ local function endBossSegment(run)
 end
 
 ---------------------------------------------------------------------------
+-- Migration: 3.1.0 speicherte Läufe unter der Instanz-ID (Event-Argument von
+-- CHALLENGE_MODE_START) statt unter der mapChallengeModeID.
+---------------------------------------------------------------------------
+
+-- source in target zusammenführen (Läufe, Bestwerte, Summen, Abschnitte)
+local function mergeEntry(target, source)
+  target.runs = (target.runs or 0) + (source.runs or 0)
+  target.name = target.name or source.name
+  target.best = target.best or {}
+  target.sum = target.sum or newCounters()
+  target.count = target.count or newCounters()
+  for _, cat in ipairs(Stats.CATEGORIES) do
+    local a, b = target.best[cat], source.best and source.best[cat]
+    if b and (a == nil or b > a) then target.best[cat] = b end
+    target.sum[cat] = (target.sum[cat] or 0) + ((source.sum and source.sum[cat]) or 0)
+    target.count[cat] = (target.count[cat] or 0) + ((source.count and source.count[cat]) or 0)
+  end
+  local tLast, sLast = target.last, source.last
+  if sLast and (not tLast or (sLast.time or 0) > (tLast.time or 0)) then target.last = sLast end
+  if source.segments then
+    target.segments = target.segments or {}
+    for key, seg in pairs(source.segments) do
+      local t = target.segments[key]
+      if not t then
+        target.segments[key] = seg
+      else
+        if seg.best and (t.best == nil or seg.best > t.best) then t.best = seg.best end
+        t.sum = (t.sum or 0) + (seg.sum or 0)
+        t.count = (t.count or 0) + (seg.count or 0)
+        t.name = t.name or seg.name
+        if t.last == nil then t.last = seg.last end
+      end
+    end
+  end
+end
+
+-- Eintrag unter der Instanz-ID auf die mapChallengeModeID umziehen. Nur Altdaten ohne
+-- instanceID-Feld werden umgezogen (neue Einträge tragen es), damit nie ein fremder Dungeon
+-- betroffen ist. Auch mplusEnded/mplusLast werden umgestellt.
+function Stats:MigrateInstanceEntry(mapID, instanceID, reason)
+  if not (mapID and instanceID) or mapID == instanceID then return end
+  local db = charDB()
+  local src = db.mplus[instanceID]
+  if src and src.instanceID == nil then
+    local dst = db.mplus[mapID]
+    local merged = dst ~= nil
+    if dst then
+      mergeEntry(dst, src)
+    else
+      db.mplus[mapID] = src
+    end
+    db.mplus[instanceID] = nil
+    ns.Debug:Add("mplusMigrate", {
+      reason = reason, from = instanceID, to = mapID, merged = merged,
+      runs = db.mplus[mapID].runs, name = db.mplus[mapID].name,
+    })
+  end
+  local m = db.mplus[mapID]
+  if m then m.instanceID = instanceID end
+  if db.mplusEnded and db.mplusEnded.mapID == instanceID then
+    db.mplusEnded.mapID = mapID
+    db.mplusEnded.instanceID = instanceID
+    ns.Debug:Add("mplusMigrate", { reason = reason, ended = true, from = instanceID, to = mapID })
+  end
+  if db.mplusLast and db.mplusLast.mapID == instanceID then
+    db.mplusLast.mapID = mapID
+  end
+  ns.Options:Notify()
+end
+
+---------------------------------------------------------------------------
 -- Messung
 ---------------------------------------------------------------------------
 
@@ -598,10 +679,12 @@ function Stats:StartRun(source, eventMapID)
     self:EndRun("replaced", true)
   end
   local mapID, level = activeKey()
+  local instanceID = currentInstanceID()
   local uiName = mapUIName(mapID)
   local instName = instanceName()
   local run = {
     mapID = mapID,
+    instanceID = instanceID,
     name = uiName or instName,
     nameSource = (uiName and "GetMapUIInfo") or (instName and "GetInstanceInfo") or nil,
     level = level,
@@ -622,9 +705,10 @@ function Stats:StartRun(source, eventMapID)
   ns.Debug:Add("mplusStart", {
     source = source, resumed = false,
     eventMapID = plain(eventMapID, "number"), eventMapIDSecret = issecret(eventMapID) or nil,
-    activeMapID = mapID, level = level,
+    activeMapID = mapID, instanceID = instanceID, level = level,
     nameMapUI = uiName, nameInstance = instName, name = run.name,
   })
+  self:MigrateInstanceEntry(mapID, instanceID, "start")
   self:UpdateBosses("start")
   loadEJNames("start")
 end
@@ -645,6 +729,8 @@ function Stats:CheckActive(source)
       if not ticker then
         ensureSegments(run)
         resolveRunInfo(run, "resume")
+        run.instanceID = run.instanceID or currentInstanceID()
+        self:MigrateInstanceEntry(run.mapID, run.instanceID, "resume")
         self:StartTicker()
         ns.Debug:Add("mplusStart", {
           source = source, resumed = true, activeMapID = mapID, level = run.level,
@@ -676,8 +762,12 @@ function Stats:CheckActive(source)
 
   if keyRunning then
     -- Nach Abschluss meldet die API den Schlüssel womöglich noch: nicht neu starten
+    -- mplusEnded aus 3.1.0 kann die Instanz-ID statt der mapID enthalten
     local ended = db.mplusEnded
-    if ended and ended.mapID == mapID and clock() - (ended.at or 0) <= ENDED_GUARD then
+    local instanceID = currentInstanceID()
+    local sameDungeon = ended and (ended.mapID == mapID or (instanceID ~= nil and
+      (ended.mapID == instanceID or ended.instanceID == instanceID)))
+    if sameDungeon and clock() - (ended.at or 0) <= ENDED_GUARD then
       ns.Debug:Add("mplusNoRestart", { mapID = mapID, reason = "recentlyEnded" })
       return
     end
@@ -726,8 +816,18 @@ function Stats:EndRun(reason, silent)
   local info = reason == "completed" and completionInfo() or nil
   if info then
     run.level = run.level or info.level
+    -- mapID am Ende aus der Abschlussinfo, falls sie beim Start fehlte (im Test lesbar: 587)
+    if run.mapID == nil and info.mapID then
+      run.mapID = info.mapID
+      info.mapIDUsed = true
+      resolveRunInfo(run, "completionInfo")
+    elseif run.mapID and info.mapID and info.mapID ~= run.mapID then
+      info.mapIDMismatch = run.mapID
+    end
     ns.Debug:Add("mplusCompletion", info)
   end
+  run.instanceID = run.instanceID or currentInstanceID()
+  self:MigrateInstanceEntry(run.mapID, run.instanceID, "end")
 
   local completed = reason == "completed"
   local rated = completed and run.mapID ~= nil and categoryValid(run, "total")
@@ -758,6 +858,7 @@ function Stats:EndRun(reason, silent)
       db.mplus[run.mapID] = m
     end
     if run.name then m.name = run.name end
+    if run.instanceID then m.instanceID = run.instanceID end
     result.firstRun = m.runs == 0
     m.runs = m.runs + 1
     for _, cat in ipairs(self.CATEGORIES) do
@@ -812,7 +913,7 @@ function Stats:EndRun(reason, silent)
     end
   end
 
-  if completed then db.mplusEnded = { mapID = run.mapID, at = clock() } end
+  if completed then db.mplusEnded = { mapID = run.mapID, instanceID = run.instanceID, at = clock() } end
   -- Ersetzte bzw. durch Ausschalten beendete Läufe nicht als "letzten Lauf" anbieten
   if reason ~= "replaced" and reason ~= "disabled" then db.mplusLast = result end
 
