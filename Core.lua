@@ -27,6 +27,15 @@ ns.defaults = {
     scale = 1,
     position = { point = "CENTER", relPoint = "CENTER", x = 0, y = -150 },   -- bis 3.0.0-alpha.2; Startwert für Layouts
     layouts = {},            -- Position pro Bearbeitungsmodus-Layout (EditMode.lua)
+    stats = {                -- M+-Statistik (Stats.lua)
+      enabled = true,        -- Statistik erfassen
+      showWindow = true,     -- Fenster am Ende des Laufs zeigen
+      windowPos = nil,       -- { point, relPoint, x, y }
+    },
+  },
+  -- Pro Charakter, nicht im Profil: Profilkopien übertragen keine Statistik
+  char = {
+    mplus = {},              -- [mapID] = { name, runs, best, sum, count, last }
   },
   global = {
     debug = false,
@@ -287,10 +296,35 @@ end
 function handlers.PLAYER_ENTERING_WORLD(isInitialLogin, isReloadingUi)
   ns.Debug:LogInstance({ initial = isInitialLogin, reload = isReloadingUi })
   ns.Display:UpdateVisibility()   -- "Nur in Instanzen" hängt an IsInInstance()
+  -- M+-Lauf nach Login/Reload fortsetzen bzw. Verlassen der Instanz erkennen
+  local reload = (isInitialLogin == true or isReloadingUi == true) and "reload" or "enterWorld"
+  ns.Stats:CheckActive(reload)
 end
 
 function handlers.ZONE_CHANGED_NEW_AREA()
   ns.Display:UpdateVisibility()
+  ns.Stats:CheckActive("zoneChanged")
+end
+
+-- M+-Statistik (Stats.lua). Events und APIs im Spiel noch nicht getestet.
+function handlers.CHALLENGE_MODE_START(mapID)
+  ns.Stats:OnChallengeStart(mapID)
+end
+
+function handlers.CHALLENGE_MODE_COMPLETED()
+  ns.Stats:OnChallengeCompleted()
+end
+
+function handlers.CHALLENGE_MODE_RESET(mapID)
+  ns.Stats:OnChallengeReset(mapID)
+end
+
+function handlers.ENCOUNTER_START(...)
+  ns.Stats:OnEncounterStart(...)
+end
+
+function handlers.ENCOUNTER_END(...)
+  ns.Stats:OnEncounterEnd(...)
 end
 
 -- Zielregeln sofort anwenden, nicht erst beim nächsten Takt
@@ -308,6 +342,7 @@ function handlers.PLAYER_REGEN_ENABLED()
   ns.inCombat = false
   ns.Debug:Add("combatEnd")
   ns.Display:UpdateVisibility()   -- im Kampf zurückgestellte Änderung nachholen
+  ns.Stats:OnCombatEnd()          -- im Kampf zurückgestelltes Statistikfenster zeigen
 end
 
 function handlers.PLAYER_SPECIALIZATION_CHANGED(unit)
@@ -344,7 +379,7 @@ end
 
 local function printHelp()
   Print(L["HELP_HEADER"])
-  for _, key in ipairs({ "HELP_OPEN", "HELP_HELP", "HELP_CHECK", "HELP_DEBUG" }) do
+  for _, key in ipairs({ "HELP_OPEN", "HELP_HELP", "HELP_CHECK", "HELP_STATS", "HELP_DEBUG" }) do
     print("  " .. L[key])
   end
 end
@@ -389,6 +424,16 @@ function commands.check()
   print("  " .. spellLine(L["CHECK_NEAR"], Spells.near))
   if #Spells.far > 0 then
     print("  " .. spellLine(L["CHECK_FAR"], Spells.far))
+  end
+end
+
+-- /dotrange stats: Fenster mit dem letzten Lauf; /dotrange stats reset [confirm]
+function commands.stats(arg)
+  local sub, rest = (arg or ""):match("^(%S*)%s*(.-)$")
+  if sub == "reset" then
+    ns.Stats:ResetCommand(rest)
+  else
+    ns.Stats:ShowWindow(ns.db.char.mplusLast)
   end
 end
 

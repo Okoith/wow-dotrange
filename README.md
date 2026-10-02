@@ -25,6 +25,7 @@ World of Warcraft addon (Retail 12.1, Midnight) that shows the distance to your 
 - **Automatic hiding** for classes and specializations without matching spells
 - **Appearance:** colors for every range level, inactive boxes and border; box size, border width, scale, opacity
 - **Profiles:** settings per character, copy them from another character
+- **Mythic+ statistics:** at the end of a Mythic+ run, a small window shows how much of your combat time your target was in range, split into total, bosses and trash, compared with your best and average in that dungeon
 - **Languages:** English and German
 
 ## Installation
@@ -58,6 +59,7 @@ Alternatively, delete the whole `DotRange` folder before extracting the new vers
 
 - **General:** hide without target, only for hostile targets, visibility, hide in vehicles, lock, reset position, debug mode
 - **Appearance:** colors (melee, just outside, medium distance, inactive, border), box size, border width, scale, opacity
+- **M+ statistics:** record statistics, show window at the end of the run, show last run, overview per dungeon, reset statistics
 - **Profiles:** switch, copy from another character, reset
 
 ## Commands
@@ -67,6 +69,8 @@ Alternatively, delete the whole `DotRange` folder before extracting the new vers
 | `/dotrange` | Open the settings |
 | `/dotrange help` | List the commands |
 | `/dotrange check` | Print the range check for the current target in the chat |
+| `/dotrange stats` | Show the M+ statistics window of the last run |
+| `/dotrange stats reset` | Reset the M+ statistics of this character (type it twice, or add `confirm`) |
 | `/dotrange debug on\|off\|clear\|status` | Debug log (`DotRangeDebugLog` in SavedVariables, off by default) |
 
 ## How it works
@@ -97,6 +101,18 @@ The Devourer specialization is a ranged specialization and has its own range lev
 | 0 | — | target further away than 35 yd |
 
 For Devourer, a single box always means "Voidblade in range". There is no fallback to "target visible": beyond 35 yd, all boxes are inactive. `/dotrange check` shows which range levels are active.
+
+## Mythic+ statistics
+
+During a Mythic+ run, DotRange measures how much of your combat time your target was in melee range, that is, how long the display would show 3 boxes (for Devourer: Consume, 25 yd). The measurement runs in the background, even while the display itself is hidden.
+
+- **Counted time:** only while you are in combat, alive, and have a target that is not yourself and can be attacked. Time between boss pull and boss end counts as *bosses*, everything else as *trash*.
+- **End of the run:** after the key is completed, a window shows the percentage in range for total, bosses and trash, with your best and average in that dungeon. Values of 90 % or more are green, 75 % or more yellow, below that red. A new best is highlighted. If you are still in combat, the window appears when combat ends.
+- **Rating:** only completed runs with at least 30 seconds of counted time are stored. Bosses and trash are only rated with at least 10 seconds each. Runs that are reset or left before completion are shown with the note "Aborted, not rated" and are not stored.
+- **Reload:** a `/reload` during the run does not lose the measurement; it continues afterwards.
+- **Storage:** the statistics are stored per character and dungeon (not in the profile, so copying a profile does not copy statistics). The keystone level of the last run is shown, but runs are not separated by level.
+
+<!-- Screenshot: M+ statistics window -->
 
 ## Known limitations
 
