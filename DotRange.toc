@@ -18,6 +18,7 @@ Locales\deDE.lua
 Debug.lua
 Spells.lua
 Display.lua
+Stats.lua
 EditMode.lua
 Options.lua
 Core.lua

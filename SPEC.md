@@ -101,3 +101,42 @@ Die Absicherung (`pcall`, Prüfung mit `issecretvalue`) bleibt trotzdem bestehen
 - Release-Workflow mit BigWigs Packager bei Tag `v*`, wie bei OwnDPS
 - Versionen: `v3.0.0-alpha.N` für Tests, dann `v3.0.0`
 - CurseForge-Projekt-ID später in der TOC (`## X-Curse-Project-ID`)
+
+## 7. M+-Statistik „Zeit in Reichweite“ (ab 3.1.0)
+
+Am Ende eines Mythisch+-Laufs zeigt ein Fenster, wie viel Prozent der gezählten Kampfzeit das Ziel in Nahkampfreichweite war (Bedingung für 3 Boxen), getrennt nach Gesamt, Boss und Trash, mit Bestwert und Schnitt im Dungeon. Modul `Stats.lua` (`ns.Stats`).
+
+### 7.1 Messregeln
+- Nur während eines M+-Laufs: Start bei `CHALLENGE_MODE_START`, oder beim Betreten/Reload, wenn `GetActiveChallengeMapID` + `GetActiveKeystoneInfo` einen laufenden Schlüssel melden (gespeicherter Lauf wird fortgesetzt). Ende bei `CHALLENGE_MODE_COMPLETED`. `CHALLENGE_MODE_RESET` oder Verlassen der Instanz = abgebrochen.
+- Eigener Ticker alle 0,2 s (`C_Timer.NewTicker`), unabhängig von der Sichtbarkeit der Anzeige. Zeitdifferenz über `GetTime()`; Lücken über 1 s (Ladebildschirm, Reload) werden nicht gezählt (`skippedGap`).
+- Gezählt wird nur, wenn alles zutrifft: im Kampf (`InCombatLockdown`), Spieler lebt (`UnitIsDeadOrGhost("player")` false), Ziel existiert, ist nicht der Spieler und angreifbar (`UnitCanAttack`). Ist einer der Werte geheim oder nicht ermittelbar: Abschnitt nicht zählen (`skippedUnknown`).
+- In Reichweite = ein Zauber der `melee`-Stufe in Reichweite (wie 3 Boxen; beim Verschlinger Consume, 25 m). Kein Treffer und ein Ergebnis geheim/fehlerhaft = unbekannt (`skippedUnknown`).
+- Boss = zwischen `ENCOUNTER_START` und `ENCOUNTER_END`, sonst Trash. Der Boss-Zustand liegt im gespeicherten Lauf und übersteht einen Reload.
+- Prozent = `inRange / total * 100`, eine Nachkommastelle. Gesamt unter 30 s: Lauf nicht werten. Boss/Trash nur werten, wenn in der Kategorie mindestens 10 s gezählt wurden.
+- Nach einem Abschluss startet derselbe Dungeon 90 min lang nicht automatisch neu (nur per `CHALLENGE_MODE_START`), falls die API den Schlüssel noch meldet. Ist der Schlüssel-Status unbekannt (API-Fehler) und der Spieler in einer Instanz, wird nichts beendet.
+
+### 7.2 Speicherung
+- `DotRangeDB` über AceDB `db.char` (nicht im Profil): `db.char.mplus[mapID] = { name, runs, best, sum, count, last }` wie in der Aufgabe beschrieben; nur abgeschlossene, gewertete Läufe.
+- `db.char.mplusCurrent`: laufender Messstand (nur Zahlen), damit `/reload` die Messung nicht verliert. `db.char.mplusLast`: Ergebnis des letzten Laufs fürs Fenster (`/dotrange stats`). `db.char.mplusEnded`: Abschluss-Sperre (7.1).
+- Fensterposition und Schalter im Profil: `profile.stats = { enabled, showWindow, windowPos }`.
+
+### 7.3 Fenster, Menü, Befehle
+- Eigenes Fenster (`BackdropTemplate`), verschiebbar, Position gespeichert, Schließen-Button. Nach Abschluss bzw. Abbruch; im Kampf erst nach `PLAYER_REGEN_ENABLED`.
+- Farben: ≥ 90 % grün, ≥ 75 % gelb, sonst rot. Neuer Bestwert: Zeile hervorgehoben + „Neuer Bestwert!“. Erster Lauf: „Erster gewerteter Lauf“. Abbruch: „Abgebrochen, nicht gewertet“.
+- Menü-Tab „M+-Statistik“: Statistik erfassen, Fenster am Ende zeigen, letzten Lauf zeigen, Übersicht pro Dungeon, Zurücksetzen mit Bestätigung.
+- `/dotrange stats`, `/dotrange stats reset` (zweimal innerhalb von 15 s oder `confirm`).
+
+### 7.4 Debug-Log
+`mplusStart` (mapID, Name, Stufe, Quelle `event`/`reload`/`enterWorld`, `resumed`), `mplusEnd` (Grund, Sekunden und Prozent je Kategorie, `skippedUnknown`, gewertet, neuer Bestwert), `mplusCompletion` (aus `GetChallengeCompletionInfo`), `encounter` (Start/Ende, Argumente nur wenn lesbar), `challengeEvent`, `mplusTick` (höchstens alle 30 s), `mplusKeyUnknown`, `mplusNoRestart`, `mplusDiscarded`.
+
+### 7.5 Getestete Fakten
+| Punkt | Ergebnis |
+|---|---|
+| `C_Spell.IsSpellInRange` im Kampf im M+ | lesbar, kein `<SECRET>` (DotRange-Debug-Log, Paladin Vergeltung, mit Schlüsselstein: 4.695 Status-Einträge, viele mit `melee 96231 = true`, `state = 3`) |
+| `UnitExists`, `UnitCanAttack`, `UnitIsVisible` für `target` im Kampf im M+ | lesbar (gleiches Log) |
+
+### 7.6 Noch nicht im Spiel getestet (laut warcraft.wiki.gg in 12.1.5 vorhanden)
+- Events: `CHALLENGE_MODE_START` (mapID), `CHALLENGE_MODE_COMPLETED` (ohne Argumente), `CHALLENGE_MODE_RESET` (mapID), `ENCOUNTER_START`/`ENCOUNTER_END` (seit 12.0.7 zusätzlich `encounterUnitStatus`)
+- APIs: `C_ChallengeMode.GetActiveChallengeMapID`, `GetActiveKeystoneInfo`, `IsChallengeModeActive`, `GetMapUIInfo` (Name als 1. Rückgabe)
+- Abschlussinfo: `C_ChallengeMode.GetChallengeCompletionInfo` (Nachfolger von `GetCompletionInfo` seit 11.0.5), nur fürs Log und als Ersatz für die Stufe
+- `UnitIsDeadOrGhost`: Prädikat „AllowedWhenUntainted“ betrifft nur geheime Argumente; aufgerufen wird mit `"player"`

@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.1.0
+
+- **Mythic+ statistics "time in range":** during a Mythic+ run, DotRange measures how much of your combat time your target was in melee range (3 boxes; for Devourer: Consume). At the end of the run, a small window shows the result for total, bosses and trash, compared with your best and average in that dungeon. New bests are highlighted.
+- Only completed runs with at least 30 seconds of counted combat time are stored, per character and dungeon. Aborted runs are shown but not stored. The measurement continues after a `/reload`.
+- New settings tab *M+ statistics*: record statistics, show window at the end of the run, show last run, overview per dungeon, reset statistics.
+- New commands: `/dotrange stats` and `/dotrange stats reset`.
+- **Devourer Demon Hunter:** own range levels, see 3.1.0-alpha.1 below.
+
 ## 3.0.3
 
 - Addon icon in the AddOns list.

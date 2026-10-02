@@ -160,6 +160,54 @@ local function buildOptions()
     },
   }
 
+  -- M+-Statistik (Stats.lua) -------------------------------------------------
+  o.args.stats = {
+    type = "group", order = 3, name = L["TAB_STATS"],
+    args = {
+      note = { type = "description", order = 1, name = L["OPT_STATS_NOTE"] .. "\n" },
+      enabled = {
+        type = "toggle", order = 2, name = L["OPT_STATS_ENABLED"], width = "full",
+        get = function() return ns.db.profile.stats.enabled end,
+        set = function(_, value)
+          ns.Debug:Add("setting", { ["stats.enabled"] = value })
+          ns.Stats:SetEnabled(value)
+        end,
+      },
+      showWindow = {
+        type = "toggle", order = 3, name = L["OPT_STATS_WINDOW"], width = "full",
+        arg = { "stats", "showWindow" }, get = get, set = set,
+      },
+      lastRun = {
+        type = "execute", order = 4, name = L["OPT_STATS_SHOW_LAST"],
+        disabled = function() return ns.db.char.mplusLast == nil end,
+        func = function() ns.Stats:ShowWindow(ns.db.char.mplusLast) end,
+      },
+      overviewHeader = { type = "header", order = 10, name = L["OPT_STATS_OVERVIEW"] },
+      overview = {
+        type = "description", order = 11, fontSize = "medium", width = "full",
+        name = function()
+          local list = ns.Stats:Overview()
+          if #list == 0 then return L["OPT_STATS_EMPTY"] end
+          local lines = {}
+          for _, e in ipairs(list) do
+            lines[#lines + 1] = L["OPT_STATS_LINE"]:format(e.name, e.runs,
+              ns.Stats.FormatPct(e.best), ns.Stats.FormatPct(e.avg))
+          end
+          return table.concat(lines, "\n")
+        end,
+      },
+      resetHeader = { type = "header", order = 20, name = "" },
+      reset = {
+        type = "execute", order = 21, name = L["OPT_STATS_RESET"], desc = L["OPT_STATS_RESET_DESC"],
+        confirm = true, confirmText = L["OPT_STATS_RESET_CONFIRM"],
+        func = function()
+          ns.Stats:Reset()
+          ns.Print(L["STATS_RESET_DONE"])
+        end,
+      },
+    },
+  }
+
   -- Profile: "Kopieren von", Zurücksetzen usw. (AceDBOptions-3.0) ------------
   if AceDBOptions then
     o.args.profiles = AceDBOptions:GetOptionsTable(ns.db)
