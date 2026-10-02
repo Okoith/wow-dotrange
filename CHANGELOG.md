@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.2.0
+
+- **M+ statistics per section:** the end-of-run window now lists every section in the order you played it, like WarpDeplete: trash, first boss, trash, second boss, and so on, each with its percentage in range and your best for that section. Trash counts towards the next boss you pull; trash after the last boss is a separate section. A wipe and the next attempt count as the same boss section.
+- Boss names come from the encounter, the dungeon journal or the scenario objectives; if none is readable, the boss is shown as "Boss N". The dungeon journal window is never opened.
+- Sections are stored per character and dungeon, with best, average and last value. Existing statistics remain valid.
+- **Fixed:** the window could show "Unknown dungeon". The start event reports the instance ID, not the keystone dungeon ID. The dungeon is now always taken from the active keystone (or from the completion info at the end of the run), with the instance name as a fallback.
+- Statistics recorded with 3.1.0 under the instance ID are moved to the correct dungeon automatically (merged if both exist).
+- The window adapts its height to the number of sections and has wider columns.
+
 ## 3.1.0
 
 - **Mythic+ statistics "time in range":** during a Mythic+ run, DotRange measures how much of your combat time your target was in melee range (3 boxes; for Devourer: Consume). At the end of the run, a small window shows the result for total, bosses and trash, compared with your best and average in that dungeon. New bests are highlighted.

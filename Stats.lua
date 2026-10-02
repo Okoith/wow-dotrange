@@ -7,11 +7,20 @@ local L = ns.L
 -- davon, ob die Anzeige sichtbar ist. Gezählt wird nur, wenn der Spieler im Kampf ist, lebt
 -- und ein angreifbares Ziel hat. "In Reichweite" ist dieselbe Bedingung wie für 3 Boxen.
 --
--- Der laufende Messstand liegt in db.char.mplusCurrent (nur Zahlen, nie geheime Werte), damit
--- die Messung nach /reload weiterläuft. Abgeschlossene Läufe landen in db.char.mplus[mapID].
+-- Ab 3.2.0 zusätzlich nach Abschnitten wie WarpDeplete: Trash, Boss 1, Trash, Boss 2 ...
+-- Trash gehört zum nächsten gepullten Boss; Trash nach dem letzten Boss ist ein eigener
+-- Abschnitt. Ein Wipe zählt zum selben Boss-Abschnitt.
 --
--- Alle Challenge-Mode-APIs und -Events sind im Spiel noch nicht getestet: jeder Aufruf in
--- pcall, jedes Ergebnis auf Secret Values geprüft, Unbekanntes wird geloggt statt geraten.
+-- Der laufende Messstand liegt in db.char.mplusCurrent (nur Zahlen und lesbare Texte, nie
+-- geheime Werte), damit die Messung nach /reload weiterläuft. Abgeschlossene Läufe landen in
+-- db.char.mplus[mapID].
+--
+-- Jeder API-Aufruf steht in pcall, jedes Ergebnis wird auf Secret Values geprüft,
+-- Unbekanntes wird geloggt statt geraten.
+--
+-- Teile der Bosslisten- und Namenslogik sind nach WarpDeplete (https://github.com/happenslol/
+-- WarpDeplete, MIT-Lizenz, Copyright (c) 2021 Hilmar Wiegand) übernommen und angepasst:
+-- State.lua UpdateObjectives/LoadKeyDetails, Util.lua getEJInstanceID/formatObjectiveName.
 
 local Stats = {}
 ns.Stats = Stats
@@ -21,11 +30,14 @@ local issecret = issecretvalue or function() return false end
 local TICK_INTERVAL = 0.2
 local MAX_TICK_GAP = 1.0          -- größere Lücken (Ladebildschirm, Reload) nicht zählen
 local MIN_TOTAL = 30              -- Sekunden, darunter wird ein Lauf nicht gewertet
-local MIN_CATEGORY = 10           -- Sekunden, Mindestzeit für Boss- bzw. Trash-Wert
+local MIN_CATEGORY = 10           -- Sekunden, Mindestzeit für Boss-/Trash-Wert und Abschnitte
 local TICK_LOG_INTERVAL = 30      -- Zwischenstand im Debug-Log
 local RESUME_MAX_AGE = 2 * 3600   -- gespeicherten Lauf höchstens so lange fortsetzen
 local ENDED_GUARD = 90 * 60       -- nach Abschluss im selben Dungeon nicht neu starten
 local RESET_CONFIRM_SECONDS = 15
+local MAX_CRITERIA = 20
+local EPSILON = 0.05              -- Toleranz für Gleitkomma-Summen (50 x 0,2 s = 9,9999...)
+local CRITERIA_TYPE_DUNGEON_ENCOUNTER = 165   -- assetID = DungeonEncounterID (WarpDeplete)
 
 Stats.CATEGORIES = { "total", "boss", "trash" }
 
@@ -34,6 +46,9 @@ local lastTickTime
 local lastTickLog = 0
 local pendingWindow = false
 local resetRequestedAt
+local ejNames                    -- [DungeonEncounterID] = Name aus dem Dungeonkompendium
+local ejSelected = false         -- EJ_SelectInstance in dieser Sitzung schon aufgerufen
+local lastBossesSignature
 
 ---------------------------------------------------------------------------
 -- Hilfen
@@ -63,6 +78,11 @@ local function plain(v, wantType)
   return v
 end
 
+local function nonEmpty(s)
+  if type(s) == "string" and s ~= "" then return s end
+  return nil
+end
+
 local function round1(v)
   return math.floor(v * 10 + 0.5) / 10
 end
@@ -85,7 +105,7 @@ function Stats:IsEnabled()
 end
 
 ---------------------------------------------------------------------------
--- Challenge-Mode-Infos (nicht getestet, daher defensiv)
+-- Challenge-Mode-Infos (defensiv)
 ---------------------------------------------------------------------------
 
 local CM = C_ChallengeMode
@@ -111,10 +131,50 @@ local function challengeModeActive()
   return plain(active, "boolean")
 end
 
-function Stats:GetMapName(mapID)
+-- Name über GetMapUIInfo (1. Rückgabe)
+local function mapUIName(mapID)
   if not (CM and mapID) then return nil end
   local ok, name = try("GetMapUIInfo", CM.GetMapUIInfo, mapID)
-  return ok and plain(name, "string") or nil
+  return ok and nonEmpty(plain(name, "string")) or nil
+end
+
+-- Fallback: Name der aktuellen Instanz (nur in einer Dungeon-Instanz sinnvoll)
+local function instanceName()
+  local ok, name, instanceType = pcall(GetInstanceInfo)
+  if not ok then return nil end
+  if plain(instanceType, "string") ~= "party" then return nil end
+  return nonEmpty(plain(name, "string"))
+end
+
+-- Instanz-ID (8. Rückgabe von GetInstanceInfo), nur in einer Dungeon-Instanz.
+-- Im Test (3.1.0, Mördergasse) lieferte CHALLENGE_MODE_START genau diese ID (2813) statt
+-- der mapChallengeModeID (587).
+local function currentInstanceID()
+  local ok, _, instanceType, _, _, _, _, _, instanceID = pcall(GetInstanceInfo)
+  if not ok then return nil end
+  if plain(instanceType, "string") ~= "party" then return nil end
+  return plain(instanceID, "number")
+end
+
+function Stats:GetMapName(mapID)
+  return mapUIName(mapID)
+end
+
+-- Fehlende mapID bzw. fehlenden Namen nachtragen; ein bekannter Name bleibt erhalten
+local function resolveRunInfo(run, reason)
+  if not run.mapID then
+    local mapID = activeKey()
+    if mapID then run.mapID = mapID end
+  end
+  if not run.name then
+    local uiName = mapUIName(run.mapID)
+    local instName = (not uiName) and instanceName() or nil
+    run.name = uiName or instName
+    if run.name then
+      run.nameSource = uiName and "GetMapUIInfo" or "GetInstanceInfo"
+      ns.Debug:Add("mplusName", { reason = reason, mapID = run.mapID, name = run.name, source = run.nameSource })
+    end
+  end
 end
 
 -- Abschlussinfo (Nachfolger von GetCompletionInfo seit 11.0.5, warcraft.wiki.gg)
@@ -138,12 +198,337 @@ local function inInstance()
 end
 
 ---------------------------------------------------------------------------
--- Messung
+-- Bossliste aus den Szenario-Zielen (nach WarpDeplete UpdateObjectives)
+---------------------------------------------------------------------------
+
+-- Anzahl Kriterien: C_Scenario.GetStepInfo (3. Rückgabe, wie WarpDeplete), sonst
+-- C_ScenarioInfo.GetScenarioStepInfo().numCriteria. Rückgabe: Anzahl, Quelle
+local function criteriaCount()
+  if C_Scenario and C_Scenario.GetStepInfo then
+    local ok, _, _, num = try("C_Scenario.GetStepInfo", C_Scenario.GetStepInfo)
+    num = ok and plain(num, "number") or nil
+    if num then return num, "GetStepInfo" end
+  end
+  if C_ScenarioInfo and C_ScenarioInfo.GetScenarioStepInfo then
+    local ok, info = try("GetScenarioStepInfo", C_ScenarioInfo.GetScenarioStepInfo)
+    if ok and type(info) == "table" and not issecret(info) then
+      local num = plain(info.numCriteria, "number")
+      if num then return num, "GetScenarioStepInfo" end
+    end
+  end
+  return nil, "none"
+end
+
+-- Endungen wie "besiegt"/"defeated" entfernen (WarpDeplete formatObjectiveName;
+-- deDE-Filter von DotRange ergänzt)
+local OBJECTIVE_FILTERS = { " [Bb]esiegt", "[Bb]esiegt", " [Dd]efeated", "[Dd]efeated" }
+
+local function formatObjectiveName(description)
+  if type(description) ~= "string" then return nil end
+  local result = description
+  for _, filter in ipairs(OBJECTIVE_FILTERS) do
+    result = result:gsub(filter, "")
+  end
+  result = result:gsub("^%s+", ""):gsub("%s+$", "")
+  return nonEmpty(result)
+end
+Stats.FormatObjectiveName = formatObjectiveName
+
+-- Liest die Kriterien. Rückgabe: Bossliste { {encounterID, description, completed, index} },
+-- flache Tabelle fürs Debug-Log, Signatur
+local function readBosses()
+  local bosses, log, parts = {}, {}, {}
+  if not (C_ScenarioInfo and C_ScenarioInfo.GetCriteriaInfo) then
+    return bosses, { missing = "C_ScenarioInfo.GetCriteriaInfo" }, "missing"
+  end
+  local num, source = criteriaCount()
+  log.count = num
+  log.countSource = source
+  if not num or num <= 0 then return bosses, log, "none" end
+  for i = 1, math.min(num, MAX_CRITERIA) do
+    local ok, info = try("GetCriteriaInfo", C_ScenarioInfo.GetCriteriaInfo, i)
+    if ok and type(info) == "table" and not issecret(info) then
+      local ctype = plain(info.criteriaType, "number")
+      local asset = plain(info.assetID, "number")
+      local desc = plain(info.description, "string")
+      local completed = plain(info.completed, "boolean")
+      local weighted = plain(info.isWeightedProgress, "boolean")
+      log["c" .. i] = table.concat({
+        tostring(ctype), tostring(asset), tostring(desc), tostring(completed), tostring(weighted),
+      }, "|")
+      parts[#parts + 1] = log["c" .. i]
+      if weighted ~= true and ctype == CRITERIA_TYPE_DUNGEON_ENCOUNTER and asset and asset ~= 0 then
+        bosses[#bosses + 1] = { encounterID = asset, description = desc, completed = completed, index = i }
+      end
+    else
+      log["c" .. i] = "unreadable"
+      parts[#parts + 1] = "?"
+    end
+  end
+  return bosses, log, table.concat(parts, ";")
+end
+
+function Stats:UpdateBosses(reason)
+  local run = charDB().mplusCurrent
+  if not run then return end
+  local bosses, log, signature = readBosses()
+  if #bosses > 0 then run.bosses = bosses end
+  if signature ~= lastBossesSignature then
+    lastBossesSignature = signature
+    log.reason = reason
+    log.bosses = #bosses
+    ns.Debug:Add("mplusBosses", log)
+  end
+end
+
+---------------------------------------------------------------------------
+-- Bossnamen aus dem Dungeonkompendium (ohne das Fenster zu öffnen)
+---------------------------------------------------------------------------
+
+-- Journal-Instanz wie WarpDeplete Util.getEJInstanceID (ohne dessen feste Tabelle alter
+-- Dungeons): C_Map.GetBestMapForUnit("player") → EJ_GetInstanceForMap
+local function ejInstanceID()
+  if not (C_Map and C_Map.GetBestMapForUnit) then return nil end
+  local okMap, uiMapID = try("GetBestMapForUnit", C_Map.GetBestMapForUnit, "player")
+  uiMapID = okMap and plain(uiMapID, "number") or nil
+  if not uiMapID then return nil end
+  local ok, id = try("EJ_GetInstanceForMap", EJ_GetInstanceForMap, uiMapID)
+  id = ok and plain(id, "number") or nil
+  if id and id ~= 0 then return id end
+  return nil
+end
+
+local function readEJ(instanceID)
+  local names, count = {}, 0
+  for i = 1, MAX_CRITERIA do
+    local ok, name, _, _, _, _, _, dungeonEncounterID = try("EJ_GetEncounterInfoByIndex",
+      EJ_GetEncounterInfoByIndex, i, instanceID)
+    if not ok then break end
+    name = nonEmpty(plain(name, "string"))
+    dungeonEncounterID = plain(dungeonEncounterID, "number")
+    if not name then break end
+    if dungeonEncounterID then
+      names[dungeonEncounterID] = name
+      count = count + 1
+    end
+  end
+  return names, count
+end
+
+-- Laut warcraft.wiki.gg (EJ_GetEncounterInfo) liefert die Funktion mit journalInstanceID nur
+-- Werte, wenn EJ_SelectInstance in der Sitzung einmal aufgerufen wurde. Wir rufen es nur
+-- dann auf, und nur mit der Instanz des aktuellen Dungeons.
+local function loadEJNames(reason)
+  local instanceID = ejInstanceID()
+  if not instanceID then
+    ns.Debug:Add("mplusEJ", { reason = reason, instanceID = "none" })
+    return
+  end
+  local names, count = readEJ(instanceID)
+  local selected = false
+  if count == 0 and not ejSelected and type(EJ_SelectInstance) == "function" then
+    ejSelected = true
+    selected = try("EJ_SelectInstance", EJ_SelectInstance, instanceID)
+    names, count = readEJ(instanceID)
+  end
+  ejNames = names
+  ns.Debug:Add("mplusEJ", { reason = reason, instanceID = instanceID, count = count, selectInstance = selected })
+end
+
+-- Bossname in der Reihenfolge der SPEC: Event, Kompendium, Kriterium, "Boss N".
+-- Rückgabe: name, Quelle
+local function bossName(run, encounterID, eventName, number)
+  local name = nonEmpty(plain(eventName, "string"))
+  if name then return name, "event" end
+  if encounterID then
+    if not ejNames then loadEJNames("bossName") end
+    if ejNames and ejNames[encounterID] then return ejNames[encounterID], "journal" end
+    for _, b in ipairs(run.bosses or {}) do
+      if b.encounterID == encounterID then
+        local formatted = formatObjectiveName(b.description)
+        if formatted then return formatted, "criteria" end
+      end
+    end
+  end
+  return L["STATS_BOSS_N"]:format(number), "number"
+end
+
+---------------------------------------------------------------------------
+-- Abschnitte
 ---------------------------------------------------------------------------
 
 local function newCounters()
   return { total = 0, boss = 0, trash = 0 }
 end
+
+local function newSegment(key, kind, encounterID, name, nameSource)
+  return { key = key, kind = kind, encounterID = encounterID, name = name, nameSource = nameSource,
+    time = 0, inRange = 0 }
+end
+
+-- Lauf aus 3.1.0 (ohne Abschnitte) bzw. neuer Lauf: offenen Trash-Topf anlegen
+local function ensureSegments(run)
+  if not run.segments then
+    run.segments = { newSegment("trash:open", "trash") }
+    run.current = 1
+    run.bossNumber = 0
+  end
+end
+
+local function findSegment(run, key)
+  for i, seg in ipairs(run.segments) do
+    if seg.key == key then return i, seg end
+  end
+  return nil
+end
+
+local function logSegment(run, seg)
+  ns.Debug:Add("mplusSegment", {
+    kind = seg.kind, key = seg.key, encounterID = seg.encounterID, name = seg.name,
+    nameSource = seg.nameSource, index = run.current,
+  })
+end
+
+-- ENCOUNTER_START: offenen Trash-Topf diesem Boss zuordnen, Boss-Abschnitt beginnen
+local function startBossSegment(run, encounterID, eventName)
+  ensureSegments(run)
+  local bossKey
+  if encounterID then
+    bossKey = "boss:" .. encounterID
+  end
+  local existingIndex = bossKey and findSegment(run, bossKey)
+  local number
+  if existingIndex then
+    number = nil
+  else
+    run.bossNumber = (run.bossNumber or 0) + 1
+    number = run.bossNumber
+    if not bossKey then bossKey = "boss:#" .. number end
+  end
+
+  local name, nameSource
+  if existingIndex then
+    local seg = run.segments[existingIndex]
+    name, nameSource = seg.name, seg.nameSource
+  else
+    name, nameSource = bossName(run, encounterID, eventName, number)
+  end
+
+  -- offenen Trash-Topf diesem Boss zuordnen (bei einem Wipe in den vorhandenen Trash-Abschnitt)
+  local cur = run.segments[run.current]
+  if cur and cur.key == "trash:open" then
+    local trashKey = "trash:" .. (encounterID or ("#" .. (number or 0)))
+    local _, existingTrash = findSegment(run, trashKey)
+    if existingTrash then
+      existingTrash.time = existingTrash.time + cur.time
+      existingTrash.inRange = existingTrash.inRange + cur.inRange
+      table.remove(run.segments, run.current)
+    else
+      cur.key = trashKey
+      cur.encounterID = encounterID
+      cur.name = L["STATS_TRASH_BEFORE"]:format(name)
+    end
+  end
+
+  local index = findSegment(run, bossKey)
+  if not index then
+    run.segments[#run.segments + 1] = newSegment(bossKey, "boss", encounterID, name, nameSource)
+    index = #run.segments
+  end
+  run.current = index
+  run.boss = true
+  if not encounterID then
+    ns.Debug:Add("mplusEncounterUnknown", { bossNumber = number, key = bossKey })
+  end
+  logSegment(run, run.segments[index])
+end
+
+-- ENCOUNTER_END: neuer offener Trash-Topf
+local function endBossSegment(run)
+  ensureSegments(run)
+  run.boss = false
+  local _, open = findSegment(run, "trash:open")
+  if not open then
+    run.segments[#run.segments + 1] = newSegment("trash:open", "trash")
+  end
+  run.current = (findSegment(run, "trash:open"))
+  logSegment(run, run.segments[run.current])
+end
+
+---------------------------------------------------------------------------
+-- Migration: 3.1.0 speicherte Läufe unter der Instanz-ID (Event-Argument von
+-- CHALLENGE_MODE_START) statt unter der mapChallengeModeID.
+---------------------------------------------------------------------------
+
+-- source in target zusammenführen (Läufe, Bestwerte, Summen, Abschnitte)
+local function mergeEntry(target, source)
+  target.runs = (target.runs or 0) + (source.runs or 0)
+  target.name = target.name or source.name
+  target.best = target.best or {}
+  target.sum = target.sum or newCounters()
+  target.count = target.count or newCounters()
+  for _, cat in ipairs(Stats.CATEGORIES) do
+    local a, b = target.best[cat], source.best and source.best[cat]
+    if b and (a == nil or b > a) then target.best[cat] = b end
+    target.sum[cat] = (target.sum[cat] or 0) + ((source.sum and source.sum[cat]) or 0)
+    target.count[cat] = (target.count[cat] or 0) + ((source.count and source.count[cat]) or 0)
+  end
+  local tLast, sLast = target.last, source.last
+  if sLast and (not tLast or (sLast.time or 0) > (tLast.time or 0)) then target.last = sLast end
+  if source.segments then
+    target.segments = target.segments or {}
+    for key, seg in pairs(source.segments) do
+      local t = target.segments[key]
+      if not t then
+        target.segments[key] = seg
+      else
+        if seg.best and (t.best == nil or seg.best > t.best) then t.best = seg.best end
+        t.sum = (t.sum or 0) + (seg.sum or 0)
+        t.count = (t.count or 0) + (seg.count or 0)
+        t.name = t.name or seg.name
+        if t.last == nil then t.last = seg.last end
+      end
+    end
+  end
+end
+
+-- Eintrag unter der Instanz-ID auf die mapChallengeModeID umziehen. Nur Altdaten ohne
+-- instanceID-Feld werden umgezogen (neue Einträge tragen es), damit nie ein fremder Dungeon
+-- betroffen ist. Auch mplusEnded/mplusLast werden umgestellt.
+function Stats:MigrateInstanceEntry(mapID, instanceID, reason)
+  if not (mapID and instanceID) or mapID == instanceID then return end
+  local db = charDB()
+  local src = db.mplus[instanceID]
+  if src and src.instanceID == nil then
+    local dst = db.mplus[mapID]
+    local merged = dst ~= nil
+    if dst then
+      mergeEntry(dst, src)
+    else
+      db.mplus[mapID] = src
+    end
+    db.mplus[instanceID] = nil
+    ns.Debug:Add("mplusMigrate", {
+      reason = reason, from = instanceID, to = mapID, merged = merged,
+      runs = db.mplus[mapID].runs, name = db.mplus[mapID].name,
+    })
+  end
+  local m = db.mplus[mapID]
+  if m then m.instanceID = instanceID end
+  if db.mplusEnded and db.mplusEnded.mapID == instanceID then
+    db.mplusEnded.mapID = mapID
+    db.mplusEnded.instanceID = instanceID
+    ns.Debug:Add("mplusMigrate", { reason = reason, ended = true, from = instanceID, to = mapID })
+  end
+  if db.mplusLast and db.mplusLast.mapID == instanceID then
+    db.mplusLast.mapID = mapID
+  end
+  ns.Options:Notify()
+end
+
+---------------------------------------------------------------------------
+-- Messung
+---------------------------------------------------------------------------
 
 -- Wahrheitswert einer Unit-API. Rückgabe: Wert, unknown (Fehler oder Secret Value)
 local function unitBool(where, fn, ...)
@@ -200,6 +585,13 @@ local function measure(run, dt)
     run.inRange.total = run.inRange.total + dt
     run.inRange[category] = run.inRange[category] + dt
   end
+
+  ensureSegments(run)
+  local seg = run.segments[run.current]
+  if seg then
+    seg.time = seg.time + dt
+    if inRange then seg.inRange = seg.inRange + dt end
+  end
   return "counted"
 end
 
@@ -207,6 +599,11 @@ local function percent(run, category)
   local t = run.time[category]
   if t <= 0 then return nil end
   return round1(run.inRange[category] / t * 100)
+end
+
+local function segmentPercent(seg)
+  if seg.time <= 0 then return nil end
+  return round1(seg.inRange / seg.time * 100)
 end
 
 local function onTick()
@@ -235,9 +632,11 @@ local function onTick()
 
   if ns.Debug:IsEnabled() and t - lastTickLog >= TICK_LOG_INTERVAL then
     lastTickLog = t
+    local seg = run.segments and run.segments[run.current]
     ns.Debug:Add("mplusTick", {
       mapID = run.mapID,
       boss = run.boss,
+      segment = seg and seg.key,
       timeTotal = round1(run.time.total),
       timeBoss = round1(run.time.boss),
       timeTrash = round1(run.time.trash),
@@ -270,17 +669,24 @@ end
 -- Lauf starten, fortsetzen, beenden
 ---------------------------------------------------------------------------
 
-function Stats:StartRun(mapID, source)
+-- eventMapID: Argument von CHALLENGE_MODE_START, nur fürs Debug-Log.
+-- Die mapID kommt immer aus GetActiveChallengeMapID (wie WarpDeplete LoadKeyDetails).
+function Stats:StartRun(source, eventMapID)
   if not self:IsEnabled() then return end
   local db = charDB()
   if db.mplusCurrent then
     -- Ein noch offener Lauf wird ersetzt (z. B. neuer Schlüssel ohne Reset-Event)
     self:EndRun("replaced", true)
   end
-  local _, level = activeKey()
-  db.mplusCurrent = {
+  local mapID, level = activeKey()
+  local instanceID = currentInstanceID()
+  local uiName = mapUIName(mapID)
+  local instName = instanceName()
+  local run = {
     mapID = mapID,
-    name = self:GetMapName(mapID),
+    instanceID = instanceID,
+    name = uiName or instName,
+    nameSource = (uiName and "GetMapUIInfo") or (instName and "GetInstanceInfo") or nil,
     level = level,
     started = clock(),
     updated = clock(),
@@ -290,11 +696,21 @@ function Stats:StartRun(mapID, source)
     skippedUnknown = 0,
     skippedGap = 0,
   }
+  ensureSegments(run)
+  db.mplusCurrent = run
   db.mplusEnded = nil
+  ejNames = nil
+  lastBossesSignature = nil
   self:StartTicker()
   ns.Debug:Add("mplusStart", {
-    mapID = mapID, name = db.mplusCurrent.name, level = level, source = source, resumed = false,
+    source = source, resumed = false,
+    eventMapID = plain(eventMapID, "number"), eventMapIDSecret = issecret(eventMapID) or nil,
+    activeMapID = mapID, instanceID = instanceID, level = level,
+    nameMapUI = uiName, nameInstance = instName, name = run.name,
   })
+  self:MigrateInstanceEntry(mapID, instanceID, "start")
+  self:UpdateBosses("start")
+  loadEJNames("start")
 end
 
 -- Beim Betreten der Welt / nach /reload: laufenden Schlüssel erkennen und fortsetzen,
@@ -308,13 +724,21 @@ function Stats:CheckActive(source)
   local inside = inInstance()
 
   if run then
+    if keyRunning and run.mapID == nil then run.mapID = mapID end
     if keyRunning and mapID == run.mapID and clock() - (run.updated or 0) <= RESUME_MAX_AGE then
       if not ticker then
+        ensureSegments(run)
+        resolveRunInfo(run, "resume")
+        run.instanceID = run.instanceID or currentInstanceID()
+        self:MigrateInstanceEntry(run.mapID, run.instanceID, "resume")
         self:StartTicker()
         ns.Debug:Add("mplusStart", {
-          mapID = mapID, name = run.name, level = run.level, source = source, resumed = true,
-          timeTotal = round1(run.time.total),
+          source = source, resumed = true, activeMapID = mapID, level = run.level,
+          name = run.name, nameMapUI = mapUIName(mapID), nameInstance = instanceName(),
+          timeTotal = round1(run.time.total), segments = #run.segments,
         })
+        self:UpdateBosses("resume")
+        if not ejNames then loadEJNames("resume") end
       end
       return
     end
@@ -338,8 +762,12 @@ function Stats:CheckActive(source)
 
   if keyRunning then
     -- Nach Abschluss meldet die API den Schlüssel womöglich noch: nicht neu starten
+    -- mplusEnded aus 3.1.0 kann die Instanz-ID statt der mapID enthalten
     local ended = db.mplusEnded
-    if ended and ended.mapID == mapID and clock() - (ended.at or 0) <= ENDED_GUARD then
+    local instanceID = currentInstanceID()
+    local sameDungeon = ended and (ended.mapID == mapID or (instanceID ~= nil and
+      (ended.mapID == instanceID or ended.instanceID == instanceID)))
+    if sameDungeon and clock() - (ended.at or 0) <= ENDED_GUARD then
       ns.Debug:Add("mplusNoRestart", { mapID = mapID, reason = "recentlyEnded" })
       return
     end
@@ -347,13 +775,33 @@ function Stats:CheckActive(source)
       ns.Debug:Add("mplusNoRestart", { mapID = mapID, reason = "notActive" })
       return
     end
-    self:StartRun(mapID, source)
+    self:StartRun(source)
   end
 end
 
 local function categoryValid(run, category)
-  if category == "total" then return run.time.total >= MIN_TOTAL end
-  return run.time[category] >= MIN_CATEGORY
+  if category == "total" then return run.time.total >= MIN_TOTAL - EPSILON end
+  return run.time[category] >= MIN_CATEGORY - EPSILON
+end
+
+-- Abschnitte für Ergebnis und Speicherung vorbereiten: offener Trash wird zu "trash:end",
+-- leere Trash-Abschnitte entfallen.
+local function finalizeSegments(run)
+  ensureSegments(run)
+  local out = {}
+  for _, seg in ipairs(run.segments) do
+    if seg.key == "trash:open" then
+      seg.key = "trash:end"
+      seg.name = L["STATS_TRASH_AFTER_LAST"]
+    end
+    if not (seg.kind == "trash" and seg.time <= 0) then
+      out[#out + 1] = {
+        key = seg.key, kind = seg.kind, name = seg.name, nameSource = seg.nameSource,
+        time = round1(seg.time), pct = segmentPercent(seg), valid = seg.time >= MIN_CATEGORY - EPSILON,
+      }
+    end
+  end
+  return out
 end
 
 -- Beendet den Lauf. reason: "completed", "reset", "leftInstance", "replaced", "disabled"
@@ -364,12 +812,22 @@ function Stats:EndRun(reason, silent)
   if not run then return end
   db.mplusCurrent = nil
 
+  resolveRunInfo(run, "end")
   local info = reason == "completed" and completionInfo() or nil
   if info then
     run.level = run.level or info.level
+    -- mapID am Ende aus der Abschlussinfo, falls sie beim Start fehlte (im Test lesbar: 587)
+    if run.mapID == nil and info.mapID then
+      run.mapID = info.mapID
+      info.mapIDUsed = true
+      resolveRunInfo(run, "completionInfo")
+    elseif run.mapID and info.mapID and info.mapID ~= run.mapID then
+      info.mapIDMismatch = run.mapID
+    end
     ns.Debug:Add("mplusCompletion", info)
   end
-  run.name = run.name or self:GetMapName(run.mapID)
+  run.instanceID = run.instanceID or currentInstanceID()
+  self:MigrateInstanceEntry(run.mapID, run.instanceID, "end")
 
   local completed = reason == "completed"
   local rated = completed and run.mapID ~= nil and categoryValid(run, "total")
@@ -383,6 +841,7 @@ function Stats:EndRun(reason, silent)
     rated = rated,
     countedTime = round1(run.time.total),
     pct = {}, valid = {}, best = {}, avg = {}, newBest = {},
+    segments = finalizeSegments(run),
     runs = 0,
     firstRun = false,
     at = clock(),
@@ -395,16 +854,11 @@ function Stats:EndRun(reason, silent)
   if rated then
     local m = db.mplus[run.mapID]
     if not m then
-      m = {
-        runs = 0,
-        best = {},
-        sum = newCounters(),
-        count = newCounters(),
-        last = {},
-      }
+      m = { runs = 0, best = {}, sum = newCounters(), count = newCounters(), last = {} }
       db.mplus[run.mapID] = m
     end
     if run.name then m.name = run.name end
+    if run.instanceID then m.instanceID = run.instanceID end
     result.firstRun = m.runs == 0
     m.runs = m.runs + 1
     for _, cat in ipairs(self.CATEGORIES) do
@@ -422,6 +876,27 @@ function Stats:EndRun(reason, silent)
     end
     m.last.level = run.level
     m.last.time = clock()
+
+    -- Abschnitte (ab 3.2.0; ältere Einträge bekommen die Tabelle hier)
+    m.segments = m.segments or {}
+    for _, seg in ipairs(result.segments) do
+      local s = m.segments[seg.key]
+      if not s then
+        s = { sum = 0, count = 0 }
+        m.segments[seg.key] = s
+      end
+      if seg.name then s.name = seg.name end
+      local v = seg.valid and seg.pct or nil
+      if v then
+        if s.best == nil or v > s.best then
+          seg.newBest = s.best ~= nil
+          s.best = v
+        end
+        s.sum = s.sum + v
+        s.count = s.count + 1
+      end
+      s.last = v
+    end
   end
 
   -- Vergleichswerte fürs Fenster (auch bei nicht gewerteten Läufen)
@@ -432,15 +907,20 @@ function Stats:EndRun(reason, silent)
       result.best[cat] = m.best[cat]
       if m.count[cat] > 0 then result.avg[cat] = round1(m.sum[cat] / m.count[cat]) end
     end
+    for _, seg in ipairs(result.segments) do
+      local s = m.segments and m.segments[seg.key]
+      if s then seg.best = s.best end
+    end
   end
 
-  if completed then db.mplusEnded = { mapID = run.mapID, at = clock() } end
+  if completed then db.mplusEnded = { mapID = run.mapID, instanceID = run.instanceID, at = clock() } end
   -- Ersetzte bzw. durch Ausschalten beendete Läufe nicht als "letzten Lauf" anbieten
   if reason ~= "replaced" and reason ~= "disabled" then db.mplusLast = result end
 
-  ns.Debug:Add("mplusEnd", {
+  local log = {
     reason = reason,
     mapID = run.mapID,
+    name = run.name,
     level = run.level,
     timeTotal = round1(run.time.total),
     timeBoss = round1(run.time.boss),
@@ -454,7 +934,11 @@ function Stats:EndRun(reason, silent)
     newBestTotal = result.newBest.total == true,
     newBestBoss = result.newBest.boss == true,
     newBestTrash = result.newBest.trash == true,
-  })
+  }
+  for i, seg in ipairs(result.segments) do
+    log["seg" .. i] = table.concat({ seg.key, tostring(seg.name), tostring(seg.time), tostring(seg.pct) }, "|")
+  end
+  ns.Debug:Add("mplusEnd", log)
 
   if not silent and reason ~= "replaced" and reason ~= "disabled" then
     self:RequestWindow()
@@ -466,10 +950,12 @@ end
 -- Events (aus Core.lua weitergereicht)
 ---------------------------------------------------------------------------
 
-function Stats:OnChallengeStart(mapID)
-  mapID = plain(mapID, "number") or select(1, activeKey())
-  ns.Debug:Add("challengeEvent", { event = "CHALLENGE_MODE_START", mapID = mapID })
-  if mapID then self:StartRun(mapID, "event") end
+function Stats:OnChallengeStart(eventMapID)
+  ns.Debug:Add("challengeEvent", {
+    event = "CHALLENGE_MODE_START", eventMapID = plain(eventMapID, "number"),
+    activeMapID = (activeKey()),
+  })
+  self:StartRun("event", eventMapID)
 end
 
 function Stats:OnChallengeCompleted()
@@ -482,10 +968,15 @@ function Stats:OnChallengeReset(mapID)
   if charDB().mplusCurrent then self:EndRun("reset") end
 end
 
+function Stats:OnScenarioUpdate(event)
+  if charDB().mplusCurrent then self:UpdateBosses(event) end
+end
+
 function Stats:OnEncounterStart(encounterID, encounterName, difficultyID, groupSize)
+  local id = plain(encounterID, "number")
   ns.Debug:Add("encounter", {
     phase = "start",
-    encounterID = plain(encounterID, "number"),
+    encounterID = id,
     encounterName = plain(encounterName, "string"),
     difficultyID = plain(difficultyID, "number"),
     groupSize = plain(groupSize, "number"),
@@ -493,7 +984,7 @@ function Stats:OnEncounterStart(encounterID, encounterName, difficultyID, groupS
     running = charDB().mplusCurrent ~= nil,
   })
   local run = charDB().mplusCurrent
-  if run then run.boss = true end
+  if run then startBossSegment(run, id, encounterName) end
 end
 
 function Stats:OnEncounterEnd(encounterID, encounterName, difficultyID, groupSize, success)
@@ -506,7 +997,7 @@ function Stats:OnEncounterEnd(encounterID, encounterName, difficultyID, groupSiz
     running = charDB().mplusCurrent ~= nil,
   })
   local run = charDB().mplusCurrent
-  if run then run.boss = false end
+  if run then endBossSegment(run) end
 end
 
 function Stats:OnCombatEnd()
@@ -605,12 +1096,18 @@ function Stats:RequestWindow()
   self:ShowWindow(charDB().mplusLast)
 end
 
-local WIDTH, ROW = 470, 20
-local LABEL_X, VALUE_X = 16, 150
+-- Spalten: Name | Prozent (rechtsbündig) | Vergleich
+local WIDTH = 600
+local ROW = 18
+local PAD = 16
+local NAME_W = 220
+local PCT_RIGHT = PAD + NAME_W + 80     -- rechte Kante der Prozentspalte
+local EXTRA_X = PCT_RIGHT + 16
+local TOP = 44
 
 local function createWindow()
   local f = CreateFrame("Frame", "DotRangeStatsWindow", UIParent, "BackdropTemplate")
-  f:SetSize(WIDTH, 168)
+  f:SetSize(WIDTH, 200)
   f:SetFrameStrata("DIALOG")
   f:SetClampedToScreen(true)
   f:SetMovable(true)
@@ -638,35 +1135,57 @@ local function createWindow()
   close:SetScript("OnClick", function() f:Hide() end)
 
   f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-  f.title:SetPoint("TOPLEFT", f, "TOPLEFT", LABEL_X, -14)
+  f.title:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, -14)
   f.title:SetPoint("RIGHT", close, "LEFT", -4, 0)
   f.title:SetJustifyH("LEFT")
 
-  f.rows = {}
-  for i, cat in ipairs(Stats.CATEGORIES) do
-    local y = -44 - (i - 1) * ROW
-    local row = {}
-    row.highlight = f:CreateTexture(nil, "BACKGROUND", nil, 1)
-    row.highlight:SetPoint("TOPLEFT", f, "TOPLEFT", 6, y + 2)
-    row.highlight:SetPoint("RIGHT", f, "RIGHT", -6, 0)
-    row.highlight:SetHeight(ROW)
-    row.highlight:SetColorTexture(1, 0.82, 0, 0.15)
-    row.label = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    row.label:SetPoint("TOPLEFT", f, "TOPLEFT", LABEL_X, y)
-    row.value = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    row.value:SetPoint("TOPLEFT", f, "TOPLEFT", VALUE_X, y)
-    row.value:SetPoint("RIGHT", f, "RIGHT", -12, 0)
-    row.value:SetJustifyH("LEFT")
-    f.rows[cat] = row
-  end
+  f.separator = f:CreateTexture(nil, "ARTWORK")
+  f.separator:SetColorTexture(0.4, 0.4, 0.4, 0.8)
+  f.separator:SetHeight(1)
 
-  f.timeLine = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  f.timeLine:SetPoint("TOPLEFT", f, "TOPLEFT", LABEL_X, -44 - 3 * ROW - 8)
-  f.note = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  f.note:SetPoint("TOPLEFT", f.timeLine, "BOTTOMLEFT", 0, -8)
-  f.note:SetPoint("RIGHT", f, "RIGHT", -12, 0)
-  f.note:SetJustifyH("LEFT")
+  f.rows = {}
   return f
+end
+
+-- Zeile holen bzw. anlegen (Name, Prozent, Vergleich, Hervorhebung)
+local function getRow(f, i)
+  local row = f.rows[i]
+  if row then return row end
+  row = {}
+  row.highlight = f:CreateTexture(nil, "BACKGROUND", nil, 1)
+  row.highlight:SetColorTexture(1, 0.82, 0, 0.15)
+  row.name = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  row.name:SetWidth(NAME_W)
+  row.name:SetJustifyH("LEFT")
+  row.name:SetWordWrap(false)
+  row.pct = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  row.pct:SetJustifyH("RIGHT")
+  row.extra = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.extra:SetJustifyH("LEFT")
+  row.extra:SetWordWrap(false)
+  f.rows[i] = row
+  return row
+end
+
+local function placeRow(f, row, y)
+  row.name:ClearAllPoints()
+  row.name:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, y)
+  row.pct:ClearAllPoints()
+  row.pct:SetPoint("TOPRIGHT", f, "TOPLEFT", PCT_RIGHT, y)
+  row.extra:ClearAllPoints()
+  row.extra:SetPoint("TOPLEFT", f, "TOPLEFT", EXTRA_X, y - 1)
+  row.extra:SetPoint("RIGHT", f, "RIGHT", -12, 0)
+  row.highlight:ClearAllPoints()
+  row.highlight:SetPoint("TOPLEFT", f, "TOPLEFT", 6, y + 2)
+  row.highlight:SetPoint("RIGHT", f, "RIGHT", -6, 0)
+  row.highlight:SetHeight(ROW)
+end
+
+local function setRowShown(row, shown)
+  row.name:SetShown(shown)
+  row.pct:SetShown(shown)
+  row.extra:SetShown(shown)
+  if not shown then row.highlight:Hide() end
 end
 
 local function applyWindowPosition(f)
@@ -679,7 +1198,12 @@ local function applyWindowPosition(f)
   end
 end
 
-local LABELS = { total = "STATS_IN_RANGE", boss = "STATS_BOSSES", trash = "STATS_TRASH" }
+-- Vergleichstext für eine Zeile: "Neuer Bestwert!" oder "Bestwert x"
+local function compareText(best, newBest)
+  if newBest then return "|cffffd100" .. L["STATS_NEW_BEST"] .. "|r" end
+  if best then return "|cffaaaaaa" .. L["STATS_BEST"]:format(formatPct(best)) .. "|r" end
+  return ""
+end
 
 -- result: Tabelle aus EndRun (db.char.mplusLast). Rückgabe: true, wenn angezeigt.
 function Stats:ShowWindow(result)
@@ -696,31 +1220,87 @@ function Stats:ShowWindow(result)
     if result.level then title = title .. " +" .. result.level end
     f.title:SetText(title)
 
-    for _, cat in ipairs(self.CATEGORIES) do
-      local row = f.rows[cat]
-      row.label:SetText(L[LABELS[cat]])
-      local v = result.valid[cat] and result.pct[cat] or nil
-      local text = coloredPct(v)
-      if result.valid[cat] == false and result.pct[cat] ~= nil then
-        text = text .. "  |cffaaaaaa" .. L["STATS_TOO_SHORT_CATEGORY"] .. "|r"
+    local y = -TOP
+    local used = 0
+
+    -- Abschnitte in Laufreihenfolge (Läufe vor 3.2.0 haben keine)
+    for _, seg in ipairs(result.segments or {}) do
+      used = used + 1
+      local row = getRow(f, used)
+      placeRow(f, row, y)
+      setRowShown(row, true)
+      -- Boss weiß hervorgehoben, Trash schlicht grau
+      row.name:SetFontObject("GameFontHighlight")
+      if seg.kind == "boss" then
+        row.name:SetText("|cffffffff" .. (seg.name or "?") .. "|r")
+      else
+        row.name:SetText("|cff9d9d9d" .. L["STATS_TRASH_LINE"] .. "|r")
       end
-      local extra = {}
-      if result.best[cat] then extra[#extra + 1] = L["STATS_BEST"]:format(formatPct(result.best[cat])) end
-      if cat == "total" then
-        if result.avg.total then extra[#extra + 1] = L["STATS_AVG"]:format(formatPct(result.avg.total)) end
-        if result.runs == 1 then
-          extra[#extra + 1] = L["STATS_RUN_ONE"]
-        elseif result.runs > 1 then
-          extra[#extra + 1] = L["STATS_RUNS"]:format(result.runs)
-        end
+      local v = seg.valid and seg.pct or nil
+      row.pct:SetText(coloredPct(v))
+      local extra = compareText(seg.best, seg.newBest)
+      if not seg.valid and seg.pct ~= nil then
+        extra = "|cffaaaaaa" .. L["STATS_TOO_SHORT_CATEGORY"] .. "|r"
       end
-      if #extra > 0 then text = text .. "   |cffaaaaaa(" .. table.concat(extra, " · ") .. ")|r" end
-      if result.newBest[cat] then text = text .. "  |cffffd100" .. L["STATS_NEW_BEST"] .. "|r" end
-      row.value:SetText(text)
-      row.highlight:SetShown(result.newBest[cat] == true)
+      row.extra:SetText(extra)
+      row.highlight:SetShown(seg.newBest == true)
+      y = y - ROW
     end
 
-    f.timeLine:SetText(L["STATS_COUNTED_TIME"]:format(formatDuration(result.countedTime)))
+    -- Trennlinie
+    if used > 0 then
+      y = y - 4
+      f.separator:ClearAllPoints()
+      f.separator:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, y)
+      f.separator:SetPoint("RIGHT", f, "RIGHT", -PAD, 0)
+      f.separator:Show()
+      y = y - 6
+    else
+      f.separator:Hide()
+    end
+
+    -- Gesamt
+    used = used + 1
+    local total = getRow(f, used)
+    placeRow(f, total, y)
+    setRowShown(total, true)
+    total.name:SetFontObject("GameFontNormal")
+    total.name:SetText(L["STATS_TOTAL"])
+    local tv = result.valid.total and result.pct.total or nil
+    total.pct:SetText(coloredPct(tv))
+    -- jeder Teil einzeln gefärbt, damit ein |r die Farbe der übrigen Teile nicht aufhebt
+    local gray = "|cffaaaaaa"
+    local extra = {}
+    if result.newBest.total then
+      extra[#extra + 1] = "|cffffd100" .. L["STATS_NEW_BEST"] .. "|r"
+    elseif result.best.total then
+      extra[#extra + 1] = gray .. L["STATS_BEST"]:format(formatPct(result.best.total)) .. "|r"
+    end
+    if result.avg.total then extra[#extra + 1] = gray .. L["STATS_AVG"]:format(formatPct(result.avg.total)) .. "|r" end
+    if result.runs == 1 then
+      extra[#extra + 1] = gray .. L["STATS_RUN_ONE"] .. "|r"
+    elseif result.runs > 1 then
+      extra[#extra + 1] = gray .. L["STATS_RUNS"]:format(result.runs) .. "|r"
+    end
+    total.extra:SetText(table.concat(extra, gray .. " · |r"))
+    total.highlight:SetShown(result.newBest.total == true)
+    y = y - ROW
+
+    -- übrige Zeilen ausblenden
+    for i = used + 1, #f.rows do setRowShown(f.rows[i], false) end
+
+    -- Bosse · Trash · Kampfzeit
+    if not f.summary then
+      f.summary = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+      f.summary:SetJustifyH("LEFT")
+    end
+    f.summary:ClearAllPoints()
+    f.summary:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, y - 2)
+    f.summary:SetPoint("RIGHT", f, "RIGHT", -12, 0)
+    local bv = result.valid.boss and result.pct.boss or nil
+    local trv = result.valid.trash and result.pct.trash or nil
+    f.summary:SetText(L["STATS_SUMMARY"]:format(coloredPct(bv), coloredPct(trv), formatDuration(result.countedTime)))
+    y = y - ROW - 4
 
     local note
     if not result.completed then
@@ -730,8 +1310,17 @@ function Stats:ShowWindow(result)
     elseif result.firstRun then
       note = "|cff33ff99" .. L["STATS_FIRST_RUN"] .. "|r"
     end
+    if not f.note then
+      f.note = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+      f.note:SetJustifyH("LEFT")
+    end
+    f.note:ClearAllPoints()
+    f.note:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, y - 2)
+    f.note:SetPoint("RIGHT", f, "RIGHT", -12, 0)
     f.note:SetText(note or "")
-    f:SetHeight(note and 176 or 154)
+    if note then y = y - ROW - 4 end
+
+    f:SetHeight(-y + 14)
     f:Show()
   end)
   if not ok then

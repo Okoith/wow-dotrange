@@ -319,6 +319,15 @@ function handlers.CHALLENGE_MODE_RESET(mapID)
   ns.Stats:OnChallengeReset(mapID)
 end
 
+-- Bossliste aus den Szenario-Zielen (Stats.lua, nach WarpDeplete)
+function handlers.SCENARIO_CRITERIA_UPDATE()
+  ns.Stats:OnScenarioUpdate("SCENARIO_CRITERIA_UPDATE")
+end
+
+function handlers.SCENARIO_POI_UPDATE()
+  ns.Stats:OnScenarioUpdate("SCENARIO_POI_UPDATE")
+end
+
 function handlers.ENCOUNTER_START(...)
   ns.Stats:OnEncounterStart(...)
 end

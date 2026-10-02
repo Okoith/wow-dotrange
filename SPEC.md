@@ -102,7 +102,7 @@ Die Absicherung (`pcall`, Prüfung mit `issecretvalue`) bleibt trotzdem bestehen
 - Versionen: `v3.0.0-alpha.N` für Tests, dann `v3.0.0`
 - CurseForge-Projekt-ID später in der TOC (`## X-Curse-Project-ID`)
 
-## 7. M+-Statistik „Zeit in Reichweite“ (ab 3.1.0)
+## 7. M+-Statistik „Zeit in Reichweite“ (ab 3.1.0, Abschnitte ab 3.2.0)
 
 Am Ende eines Mythisch+-Laufs zeigt ein Fenster, wie viel Prozent der gezählten Kampfzeit das Ziel in Nahkampfreichweite war (Bedingung für 3 Boxen), getrennt nach Gesamt, Boss und Trash, mit Bestwert und Schnitt im Dungeon. Modul `Stats.lua` (`ns.Stats`).
 
@@ -113,30 +113,49 @@ Am Ende eines Mythisch+-Laufs zeigt ein Fenster, wie viel Prozent der gezählten
 - In Reichweite = ein Zauber der `melee`-Stufe in Reichweite (wie 3 Boxen; beim Verschlinger Consume, 25 m). Kein Treffer und ein Ergebnis geheim/fehlerhaft = unbekannt (`skippedUnknown`).
 - Boss = zwischen `ENCOUNTER_START` und `ENCOUNTER_END`, sonst Trash. Der Boss-Zustand liegt im gespeicherten Lauf und übersteht einen Reload.
 - Prozent = `inRange / total * 100`, eine Nachkommastelle. Gesamt unter 30 s: Lauf nicht werten. Boss/Trash nur werten, wenn in der Kategorie mindestens 10 s gezählt wurden.
+- **mapID und Name (ab 3.2.0):** mapID immer über `C_ChallengeMode.GetActiveChallengeMapID()` (wie WarpDeplete `LoadKeyDetails`); das Argument von `CHALLENGE_MODE_START` kommt nur ins Debug-Log. Name über `GetMapUIInfo(mapID)`, Fallback `GetInstanceInfo()` (nur bei `instanceType == "party"`), sonst „Unbekannter Dungeon“. Erneuter Versuch beim Start, nach `/reload` und beim Ende; ein bekannter Name bleibt.
+- **Migration (ab 3.2.0):** 3.1.0 speicherte unter der Instanz-ID (Event-Argument). Beim Laufstart, nach `/reload` und am Ende wird ein Eintrag `db.char.mplus[<Instanz-ID>]` (Instanz-ID = `select(8, GetInstanceInfo())`, nur bei Instanztyp `party`) auf die mapChallengeModeID umgezogen bzw. mit einem vorhandenen Eintrag zusammengeführt (Läufe und Summen addiert, Bestwerte als Maximum, `last` der neuere). Nur Einträge ohne Feld `instanceID` werden umgezogen; neue Einträge speichern `instanceID`. `mplusEnded`/`mplusLast` mit der Instanz-ID werden umgestellt, die Abschluss-Sperre erkennt beide IDs. Debug `mplusMigrate`.
 - Nach einem Abschluss startet derselbe Dungeon 90 min lang nicht automatisch neu (nur per `CHALLENGE_MODE_START`), falls die API den Schlüssel noch meldet. Ist der Schlüssel-Status unbekannt (API-Fehler) und der Spieler in einer Instanz, wird nichts beendet.
+
+### 7.1a Abschnitte (ab 3.2.0, nach WarpDeplete, MIT)
+- **Bossliste:** Anzahl Kriterien aus `C_Scenario.GetStepInfo()` (3. Rückgabe, wie WarpDeplete), Fallback `C_ScenarioInfo.GetScenarioStepInfo().numCriteria`. Kriterien über `C_ScenarioInfo.GetCriteriaInfo(i)`: `criteriaType == 165` → `assetID` = DungeonEncounterID; `isWeightedProgress` (Feindkräfte) wird übersprungen. Gelesen beim Start, nach `/reload` und bei `SCENARIO_CRITERIA_UPDATE`/`SCENARIO_POI_UPDATE`.
+- **Bossname** in dieser Reihenfolge: `encounterName` aus `ENCOUNTER_START` (lesbar, String) → Dungeonkompendium (`C_Map.GetBestMapForUnit("player")` → `EJ_GetInstanceForMap` → `EJ_GetEncounterInfoByIndex(i, id)`, 7. Rückgabe = DungeonEncounterID) → `description` des Kriteriums ohne „besiegt“/„defeated“ → „Boss N“. Das Kompendium-Fenster wird nicht geöffnet. Laut warcraft.wiki.gg liefert `EJ_GetEncounterInfoByIndex` mit Instanz-ID nur Werte, wenn `EJ_SelectInstance` in der Sitzung einmal aufgerufen wurde; DotRange ruft es deshalb nur bei leerem Ergebnis einmal mit der Instanz des aktuellen Dungeons auf (WarpDeplete öffnet dafür das Kompendium und wählt Instanz 1267).
+- **Boss-Abschnitt:** zwischen `ENCOUNTER_START` und `ENCOUNTER_END`, Schlüssel `boss:<DungeonEncounterID>`. Ein Wipe (`success == 0`): der nächste Versuch zählt zum selben Abschnitt. EncounterID geheim oder fehlend: `boss:#N` („Boss N“), Debug `mplusEncounterUnknown`.
+- **Trash-Abschnitt:** übrige Zeit sammelt sich in einem offenen Topf und wird beim nächsten `ENCOUNTER_START` diesem Boss zugeordnet (`trash:<id>`, „Trash vor …“). Trash nach einem Wipe kommt in den bestehenden Trash-Abschnitt dieses Bosses. Trash nach dem letzten Boss: `trash:end`. Trash-Abschnitte ohne gezählte Zeit entfallen.
+- Messregeln wie 7.1; Abschnitte zählen dieselbe Zeit wie Gesamt/Boss/Trash. Der Zwischenstand (`mplusCurrent.segments`, `current`) übersteht `/reload`.
+- Ein Abschnitt wird nur gewertet, wenn mindestens 10 s gezählt wurden (Toleranz 0,05 s für Gleitkomma-Summen), sonst „–“.
 
 ### 7.2 Speicherung
 - `DotRangeDB` über AceDB `db.char` (nicht im Profil): `db.char.mplus[mapID] = { name, runs, best, sum, count, last }` wie in der Aufgabe beschrieben; nur abgeschlossene, gewertete Läufe.
+- Ab 3.2.0 zusätzlich `segments[key] = { name, best, sum, count, last }` mit `key` = `boss:<id>`, `trash:<id>`, `trash:end` (bzw. `boss:#N`/`trash:#N`, wenn die EncounterID unbekannt war). Bestehende Einträge bleiben gültig und bekommen die Tabelle beim nächsten gewerteten Lauf.
 - `db.char.mplusCurrent`: laufender Messstand (nur Zahlen), damit `/reload` die Messung nicht verliert. `db.char.mplusLast`: Ergebnis des letzten Laufs fürs Fenster (`/dotrange stats`). `db.char.mplusEnded`: Abschluss-Sperre (7.1).
 - Fensterposition und Schalter im Profil: `profile.stats = { enabled, showWindow, windowPos }`.
 
 ### 7.3 Fenster, Menü, Befehle
 - Eigenes Fenster (`BackdropTemplate`), verschiebbar, Position gespeichert, Schließen-Button. Nach Abschluss bzw. Abbruch; im Kampf erst nach `PLAYER_REGEN_ENABLED`.
+- Ab 3.2.0: Liste der Abschnitte in Laufreihenfolge (Bossname weiß, Trash grau mit Text „Trash“), je Prozent und „Bestwert x“ bzw. „Neuer Bestwert!“; darunter Trennlinie, Zeile „Gesamt“ mit Bestwert, Schnitt, Läufen und die Zeile „Bosse · Trash · Gezählte Kampfzeit“. Breite 600 px, Höhe passt sich der Zeilenzahl an.
 - Farben: ≥ 90 % grün, ≥ 75 % gelb, sonst rot. Neuer Bestwert: Zeile hervorgehoben + „Neuer Bestwert!“. Erster Lauf: „Erster gewerteter Lauf“. Abbruch: „Abgebrochen, nicht gewertet“.
 - Menü-Tab „M+-Statistik“: Statistik erfassen, Fenster am Ende zeigen, letzten Lauf zeigen, Übersicht pro Dungeon, Zurücksetzen mit Bestätigung.
 - `/dotrange stats`, `/dotrange stats reset` (zweimal innerhalb von 15 s oder `confirm`).
 
 ### 7.4 Debug-Log
-`mplusStart` (mapID, Name, Stufe, Quelle `event`/`reload`/`enterWorld`, `resumed`), `mplusEnd` (Grund, Sekunden und Prozent je Kategorie, `skippedUnknown`, gewertet, neuer Bestwert), `mplusCompletion` (aus `GetChallengeCompletionInfo`), `encounter` (Start/Ende, Argumente nur wenn lesbar), `challengeEvent`, `mplusTick` (höchstens alle 30 s), `mplusKeyUnknown`, `mplusNoRestart`, `mplusDiscarded`.
+`mplusStart` (Event-Argument `eventMapID`, `activeMapID` aus `GetActiveChallengeMapID`, Name aus `GetMapUIInfo` und `GetInstanceInfo`, Stufe, Quelle `event`/`reload`/`enterWorld`, `resumed`), `mplusName` (nachgetragener Name), `mplusBosses` (Kriterienliste `c<i>` = Typ|assetID|description|completed|weighted, bei jeder Änderung), `mplusEJ` (Kompendium: Instanz, Anzahl, ob `EJ_SelectInstance` nötig war), `mplusSegment` (Wechsel Trash/Boss mit EncounterID, Name, Namensquelle), `mplusEncounterUnknown`, `mplusMigrate` (Umzug von/nach, zusammengeführt, Läufe), `mplusCompletion` mit `mapIDUsed` bzw. `mapIDMismatch`, `mplusEnd` (Grund, Sekunden und Prozent je Kategorie, `skippedUnknown`, gewertet, neuer Bestwert, ab 3.2.0 alle Abschnitte `seg<i>` = Schlüssel|Name|Sekunden|Prozent), `mplusCompletion` (aus `GetChallengeCompletionInfo`), `encounter` (Start/Ende, Argumente nur wenn lesbar), `challengeEvent`, `mplusTick` (höchstens alle 30 s), `mplusKeyUnknown`, `mplusNoRestart`, `mplusDiscarded`.
 
 ### 7.5 Getestete Fakten
 | Punkt | Ergebnis |
 |---|---|
 | `C_Spell.IsSpellInRange` im Kampf im M+ | lesbar, kein `<SECRET>` (DotRange-Debug-Log, Paladin Vergeltung, mit Schlüsselstein: 4.695 Status-Einträge, viele mit `melee 96231 = true`, `state = 3`) |
 | `UnitExists`, `UnitCanAttack`, `UnitIsVisible` für `target` im Kampf im M+ | lesbar (gleiches Log) |
+| Messung, Fenster und Werte (3.1.0) | funktionieren (Mördergasse +10, abgeschlossen: gesamt 80,3 %, Bosse 81,8 %, Trash 79,0 %, 14:02) |
+| Dungeonname (3.1.0) | **Fehler:** „Unbekannter Dungeon“, Stufe +10 erkannt. **Ursache bestätigt** (Debug-Log Mördergasse +10): `CHALLENGE_MODE_START` lieferte als Argument **2813 = Instanz-ID** (wie `GetInstanceInfo`), keine `mapChallengeModeID`. Ab 3.2.0 kommt die mapID aus `GetActiveChallengeMapID`, ersatzweise aus der Abschlussinfo, nie aus dem Event-Argument. |
+| `C_ChallengeMode.GetChallengeCompletionInfo()` am Ende | lesbar, auch im Kampf: `mapChallengeModeID = 587`, `level = 10`, `onTime = true`, `practiceRun = false` |
+| `ENCOUNTER_START`/`ENCOUNTER_END` im M+ | lesbar, auch im Kampf: `encounterID` 3101–3104, `encounterName` („Kystia Manaherz“, „Zaen Klingentrauer“, „Xathuux der Vernichter“, „Lithiel Glutzorn“), `difficultyID = 8`, `success = 1`. Quelle 1 für den Bossnamen ist damit belegt; Kompendium nur Rückfallebene, Szenario-Kriterien für Bossliste/Reihenfolge vor dem ersten Pull |
+| Werte des Testlaufs (Kontrolle) | gezählt 841,7 s (Boss 405,3 s, Trash 436,4 s), in Reichweite gesamt 80,3 %, Boss 81,8 %, Trash 79,0 %, `skippedUnknown = 0`, `skippedGap = 0` |
+| Bossnamen im laufenden M+ (12.1) | WarpDeplete (Interface 120100) zeigt sie an, im Spiel gesehen; `C_Scenario.GetStepInfo`, `C_ScenarioInfo.GetCriteriaInfo` funktionieren also |
 
 ### 7.6 Noch nicht im Spiel getestet (laut warcraft.wiki.gg in 12.1.5 vorhanden)
 - Events: `CHALLENGE_MODE_START` (mapID), `CHALLENGE_MODE_COMPLETED` (ohne Argumente), `CHALLENGE_MODE_RESET` (mapID), `ENCOUNTER_START`/`ENCOUNTER_END` (seit 12.0.7 zusätzlich `encounterUnitStatus`)
 - APIs: `C_ChallengeMode.GetActiveChallengeMapID`, `GetActiveKeystoneInfo`, `IsChallengeModeActive`, `GetMapUIInfo` (Name als 1. Rückgabe)
 - Abschlussinfo: `C_ChallengeMode.GetChallengeCompletionInfo` (Nachfolger von `GetCompletionInfo` seit 11.0.5), nur fürs Log und als Ersatz für die Stufe
+- Ab 3.2.0: `SCENARIO_CRITERIA_UPDATE` (criteriaID), `SCENARIO_POI_UPDATE`, `C_ScenarioInfo.GetScenarioStepInfo` (Fallback), `C_Map.GetBestMapForUnit`, `EJ_GetInstanceForMap`, `EJ_GetEncounterInfoByIndex`, `EJ_SelectInstance`, `GetInstanceInfo` (1. Rückgabe Name, 2. Instanztyp). Die Wiki-Seite zu `C_Scenario.GetStepInfo` existiert nicht (404); laut Suchergebnis ist die 3. Rückgabe `numCriteria`.
 - `UnitIsDeadOrGhost`: Prädikat „AllowedWhenUntainted“ betrifft nur geheime Argumente; aufgerufen wird mit `"player"`
